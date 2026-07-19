@@ -1,0 +1,3 @@
+[submodule "RED4ext.SDK"]
+	path = RED4ext.SDK
+	url = https://github.com/psiberx/RED4ext.SDK.git
