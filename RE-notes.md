@@ -388,7 +388,7 @@ patches — but three things must be re-verified per patch:
    v0.7 watchpoint diag and grep the new offset in the JSON), PlayerLastUsedKBM
    handler = 1037639234 (v0.9; re-find via recipe 1 from the
    "PlayerLastUsedKBM" name string).
-2. **Struct offsets** (hardcoded in main.cpp, patch-fragile):
+2. **Struct offsets** (`kBindings` table in main.cpp, patch-fragile):
    - `InkSystem + 0x210` -> hint/input manager pointer
    - `manager + 0x1E0` -> uint32 input::EInputDevice (KBD_MOUSE=1, pads 2..9)
    - `InkSystem + 0x300` -> device state provider; `vtbl + 0x218` -> value
@@ -399,6 +399,13 @@ patches — but three things must be re-verified per patch:
    instructions (`tools/` + recipe 1 in its README.md if the hash vanished) and
    read the two displacements from the singleton-load / manager-load / field-load
    sequence (`mov rcx,[rip+X]; mov rdi,[rcx+OFF1]; mov r12d,[rdi+OFF2]; cmp r12d,1`).
+   Then add a `kBindings` row for the new build, keyed on the executable's file
+   version (same value as RED4ext's `RED4EXT_V1_RUNTIME_VERSION_*` constants).
+   The hashes are shared across builds, so a row is just the four offsets.
+   Until that row exists the plugin runs the newest known offsets in fallback
+   mode and verifies them against the running game, disabling the
+   offset-dependent layers if they do not check out — so an un-ported hotfix
+   degrades rather than writing to a wrong address.
 3. **Enum values**: input::EInputDevice from RED4ext.SDK
    `Scripting/Natives/Generated/input/EInputDevice.hpp` (KBD_MOUSE=1 since
    forever; EID_COUNT bound used for the sanity filter).
@@ -475,6 +482,52 @@ leaving all broadcasts running — it stopped only the *icon swaps* (refreshes
 resolved to unchanged pad icons). So the accumulating cost is incurred at or
 downstream of the actual icon change (plausibly icon resource load/swap).
 v0.8/0.9 remove the flip events entirely, upstream of all of it.
+
+## Fix validation run (v1.1.0, controller mode, 2026-08-01)
+
+The counterpart to the observer run: same intensive mixed-input play, but with
+the shipping fix live (v1.1.0, `mode:controller`, `offsets:2.31/exact`, all
+hooks on, verbose). Single session **16:26:40 -> 23:47:02 = ~7h20m wall clock**;
+one ~93-min idle gap in the middle (17:34 -> 19:07, game paused/AFK), so
+**~5h47m active play**. Ended with a clean `session summary` footer (normal
+shutdown, not a freeze). No error/warn/crash/fallback lines anywhere in the log.
+
+Session-summary counters at shutdown:
+
+| counter | value | observer-run analogue |
+|---------|-------|-----------------------|
+| writer switch-to-KBM **suppressed** | **45,413** | 13,200 pad->KBM flips **executed** at freeze |
+| writer `device 1->5` pass-throughs | 90,000+ | (benign pad-direction writes; no KBM broadcast) |
+| script `PlayerLastUsedKBM` forced to 0 | 197,398 | 22,200 script KBM-with-pad observed at freeze |
+| script `PlayerLastUsedPad` forced to 1 | 5 | — |
+| `PlayerLastUsedPS5` forced | 0 | — |
+| **`fallbackRestores`** (v0.6 latch fired) | **0** | — |
+
+What it proves vs the observer run:
+
+- **Suppression removes the freeze, doesn't delay it.** The observer established
+  the freeze tracks *executed* pad->KBM flips and died at ~13,200 of them. This
+  run **suppressed 45,413** of those exact toxic events — **~3.4x the observer's
+  fatal count** — over ~5.8h active play with zero freeze and no slowdown. The
+  cost accumulates only when the KBM flip (and its hint-hide broadcast) actually
+  executes; blocked at the writer, it never accrues.
+- **The writer hook is the sole flip point in practice.** `fallbackRestores=0`
+  means the v0.6 latch watchdog never fired once — the v0.8 writer detour
+  (`0x140269954`, hash 3719303744) caught 100% of the switches on its own. No
+  other writer of `[[InkSystem]+0x210]+0x1E0` showed up during real gameplay,
+  empirically confirming the v0.8 static conclusion.
+- **The 90k `device 1->5` pass-throughs are harmless**, as predicted: pad-
+  direction writes that carry no KBM broadcast and no icon churn. The 197k
+  script `PlayerLastUsedKBM->0` forces are cheap bool writes, not the icon-swap
+  path — hence irrelevant to accumulation despite dwarfing the observer's 22.2k.
+
+This is the longest clean soak on record and the strongest single data point
+for the fix. The exact-match path here is behaviourally identical to the shipped
+1.0.0, so it also revalidates what is live on Nexus; 1.1.0 itself stays held
+back per the release decision. (Note: being the fix build, this run cannot
+identify *which* resource the freeze threshold tracks — that still needs a
+second observer run — but per the observer analysis the fix works by prevention
+regardless.)
 
 ## Open questions / future work
 

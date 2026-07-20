@@ -38,9 +38,17 @@ all inputs keep working exactly as before.
 
 Built and tested on game version 2.31 (GOG). Expected to work on Steam and
 Epic builds of the same patch: all code addresses resolve through the game's
-address library at runtime. On an incompatible future patch the plugin fails
-loudly at startup (RED4ext error naming the missing hash) rather than
-misbehaving silently.
+address library at runtime.
+
+Code addresses are patch-stable, struct offsets are not, so the plugin reads
+the game executable's file version at startup and picks its offsets from a
+per-build table. On a build it does not know, it falls back to the newest
+offsets it has and verifies them against the running game before changing
+anything - most hotfixes do not move these structs, so this usually just
+works. If verification fails, the offset-dependent layers stay disabled and
+the log says so, rather than writing to a wrong address. A code address that
+cannot be resolved at all still fails loudly at startup, with a RED4ext error
+naming the hash.
 
 ## Config
 
@@ -125,8 +133,11 @@ edit to the base controller layout. Full derivation in [RE-notes.md](RE-notes.md
 
 Check `<game>/red4ext/logs/mixedinputfix-*.log`:
 
-- startup: `MixedInputFix 1.0.0 active (mode:controller writer:on
-  scriptKBM:on scriptPad:on scriptPS5:on latch:on+on)`
+- startup: `MixedInputFix 1.1.0 active (mode:controller game:3.0.80.51928
+  offsets:2.31/exact writer:on scriptKBM:on scriptPad:on scriptPS5:on
+  latch:on+on)` - `offsets:<patch>/exact` means the plugin recognises this
+  game build; `/fallback` means it is running on an unlisted one and is
+  verifying the offsets it guessed (see Install)
 - first gamepad input (controller mode): `gamepad detected (device 5): UI
   device is now locked to gamepad` (5 = XInput; other pad types 2..9)
 - on exit: `session summary: suppressed=... scriptKBM=... fallbackRestores=...`
@@ -224,6 +235,11 @@ delete the marker afterwards. The offsets feed directly into
   attachment. Validated: vanilla freeze reproduced in ~25 min of intensive
   mixed input; with the fix, multi-hour sessions run clean at well past the
   vanilla freeze threshold with zero fallback events.
+
+- 1.1.0 (unreleased) - game-build awareness: struct offsets are selected from
+  a per-version table keyed on the executable's file version, and an unlisted
+  build falls back to the newest known offsets, verified against the running
+  game before the fix engages. Fix logic unchanged.
 
 ## License
 

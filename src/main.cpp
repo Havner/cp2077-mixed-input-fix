@@ -45,6 +45,13 @@
  * state. Both modes pin the field to a constant, so both remove the
  * flip churn that causes the freeze.
  *
+ * Game builds: the hooks resolve through RED4ext's address library and are
+ * patch-stable, but the struct offsets are not. The plugin reads the game
+ * executable's file version and picks its offsets from the kBindings table.
+ * An unlisted build falls back to the newest known row and verifies it at
+ * runtime before changing anything; if that fails, the offset-dependent
+ * layers stay off rather than write to a wrong address.
+ *
  * Optional config: MixedInputFix.ini next to the DLL ("enabled", "mode",
  * "verbose").
  * Opt-in diagnostic: an empty file MixedInputFix.diag next to the DLL arms
@@ -69,6 +76,8 @@
 #include <cstring>
 
 #include <Windows.h>
+#include <winver.h> // VS_FIXEDFILEINFO / GetFileVersionInfo (not pulled in by
+                    // Windows.h under WIN32_LEAN_AND_MEAN)
 
 namespace
 {
@@ -76,13 +85,24 @@ namespace
 // Version (single source for Query() and the startup banner)
 // ---------------------------------------------------------------------------
 constexpr std::uint8_t VerMajor = 1;
-constexpr std::uint16_t VerMinor = 0;
+constexpr std::uint16_t VerMinor = 1;
 constexpr std::uint32_t VerPatch = 0;
-constexpr const char* VersionStr = "1.0.0";
+constexpr const char* VersionStr = "1.1.0";
 
 // ---------------------------------------------------------------------------
-// Game binding: address-library hashes (patch-stable) and struct offsets
-// (2.31, patch-fragile - re-derivation procedure in RE-notes.md)
+// Game binding: address-library hashes and struct offsets.
+//
+// The hashes are shared by every game build - the address library maps them to
+// the right address per patch, which is what makes the hooks patch-stable.
+// Only the struct offsets move, so supporting a new build is one row in
+// kBindings below (re-derivation procedure in RE-notes.md, "Porting to a new
+// game patch").
+//
+// On a build that is not in the table the newest row is used as a fallback and
+// verified at runtime before anything is suppressed or written - see
+// BindingCheck. Most hotfixes do not move these structs, so the fallback
+// usually just works; when it does not, the offset-dependent layers stay off
+// instead of writing to a wrong address.
 // ---------------------------------------------------------------------------
 constexpr std::uint32_t InkSystemInstance_Hash = 2635337807u;    // &InkSystem*
 constexpr std::uint32_t HintRefresh_Hash = 4042789608u;          // 2.31: 0x1404a3090
@@ -92,10 +112,33 @@ constexpr std::uint32_t LastUsedKBMThunk_Hash = 1037639234u;     // 2.31: 0x1404
 constexpr std::uint32_t LastUsedPadThunk_Hash = 1291656829u;     // 2.31: 0x14188e878
 constexpr std::uint32_t LastUsedPS5PadThunk_Hash = 2647269205u;  // 2.31: 0x141cad8d0
 
-constexpr std::size_t Off_HintManager = 0x210;    // InkSystem -> manager ptr
-constexpr std::size_t Off_HintDevice = 0x1E0;     // manager -> input::EInputDevice
-constexpr std::size_t Off_DeviceProvider = 0x300; // InkSystem -> device state provider
-constexpr std::size_t VtblOff_GetDeviceValue = 0x218; // provider vfunc: current EInputDevice
+struct GameBinding
+{
+    RED4ext::v1::FileVer version;   // game executable file version
+    const char* label;              // patch name, for logs
+    std::size_t hintManager;        // InkSystem -> manager ptr
+    std::size_t hintDevice;         // manager -> input::EInputDevice
+    std::size_t deviceProvider;     // InkSystem -> device state provider
+    std::size_t vtblGetDeviceValue; // provider vfunc: current EInputDevice
+};
+
+// One row per supported build, newest LAST (the last row is also the fallback
+// for unlisted builds). Not constexpr: RED4EXT_V1_RUNTIME_VERSION_* expand to
+// CreateFileVer() calls, so this is dynamically initialised at DLL load, well
+// before Main() runs.
+const GameBinding kBindings[] = {
+    {RED4EXT_V1_RUNTIME_VERSION_2_31, "2.31", 0x210, 0x1E0, 0x300, 0x218},
+};
+constexpr std::size_t BindingCount = sizeof(kBindings) / sizeof(kBindings[0]);
+
+// Offsets actually in use; filled in from the selected binding in Main()
+// before any hook is attached.
+const GameBinding* g_binding = nullptr;
+bool g_bindingExact = false;
+std::size_t g_offHintManager = 0;
+std::size_t g_offHintDevice = 0;
+std::size_t g_offDeviceProvider = 0;
+std::size_t g_vtblGetDeviceValue = 0;
 
 // input::EInputDevice (RED4ext.SDK Generated/input/EInputDevice.hpp)
 constexpr std::uint32_t EInputDevice_KBD_MOUSE = 1;
@@ -145,6 +188,20 @@ std::atomic<std::uint64_t> g_restores{0};
 std::atomic<std::uint64_t> g_kbmOverrides{0};
 std::atomic<std::uint64_t> g_padOverrides{0};
 std::atomic<std::uint64_t> g_ps5PadOverrides{0};
+
+// Offset trust state. Stays Trusted for a build that is in kBindings, so the
+// exact-match path behaves exactly as it did before this was introduced.
+enum class BindingCheck
+{
+    Trusted,  // offsets confirmed: exact table match, or fallback that passed
+    Sampling, // fallback offsets under test - nothing suppressed or written yet
+    Failed,   // fallback offsets look wrong - offset-dependent layers disabled
+};
+std::atomic<BindingCheck> g_bindingCheck{BindingCheck::Trusted};
+std::atomic<int> g_bindingSamples{0};
+std::atomic<int> g_bindingInRange{0};
+std::atomic<int> g_bindingMatches{0};
+constexpr int BindingSamplesNeeded = 10;
 
 // ---------------------------------------------------------------------------
 // Config: MixedInputFix.ini next to the DLL (missing file = defaults)
@@ -219,6 +276,46 @@ void LoadConfig(const wchar_t* aDir)
 }
 
 // ---------------------------------------------------------------------------
+// Game build detection.
+// RED4ext keys its own RED4EXT_V1_RUNTIME_VERSION_* constants on the game
+// executable's *file* version, which - unlike the product version handed to us
+// in Sdk::runtime - also distinguishes hotfixes (1.50, 1.50 HF1 and 1.50 HF2
+// share a product version but differ in the revision field). The executable is
+// found via the OS, not a hardcoded path, so this works on any store and any
+// install location.
+// ---------------------------------------------------------------------------
+bool GetGameFileVersion(RED4ext::v1::FileVer& aOut)
+{
+    wchar_t path[MAX_PATH]{};
+    if (!GetModuleFileNameW(GetModuleHandleW(nullptr), path, MAX_PATH))
+    {
+        return false;
+    }
+
+    DWORD ignored = 0;
+    const DWORD size = GetFileVersionInfoSizeW(path, &ignored);
+    unsigned char buffer[8192];
+    if (size == 0 || size > sizeof(buffer) || !GetFileVersionInfoW(path, 0, size, buffer))
+    {
+        return false;
+    }
+
+    VS_FIXEDFILEINFO* info = nullptr;
+    UINT len = 0;
+    if (!VerQueryValueW(buffer, L"\\", reinterpret_cast<void**>(&info), &len) || !info ||
+        len < sizeof(VS_FIXEDFILEINFO) || info->dwSignature != 0xFEEF04BDu)
+    {
+        return false;
+    }
+
+    aOut.major = static_cast<std::uint16_t>(HIWORD(info->dwFileVersionMS));
+    aOut.minor = static_cast<std::uint16_t>(LOWORD(info->dwFileVersionMS));
+    aOut.build = static_cast<std::uint16_t>(HIWORD(info->dwFileVersionLS));
+    aOut.revision = static_cast<std::uint16_t>(LOWORD(info->dwFileVersionLS));
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Guarded memory access. NOTE: the game's CrashReporter reacts to
 // first-chance access violations, so these guards only cover races on
 // pointer chains the game itself uses - never probe untrusted addresses.
@@ -260,6 +357,23 @@ bool SafeWriteU32(void* aAddr, std::uint32_t aVal)
     {
         return false;
     }
+}
+
+// Sanity filters for pointers read out of a struct whose layout is not
+// confirmed for this game build. A wrong offset typically yields a small
+// integer, a float bit pattern or an unaligned value - all rejected here
+// before anything is dereferenced. Only used on the fallback path.
+bool PlausibleAddress(const void* aPtr)
+{
+    const auto value = reinterpret_cast<std::uintptr_t>(aPtr);
+    return value >= 0x10000 && value < 0x7FFFFFFFFFFFull;
+}
+
+// As above, plus 8-byte alignment (object and vtable pointers). Deliberately
+// not applied to function pointers, which carry no such guarantee.
+bool PlausiblePointer(const void* aPtr)
+{
+    return PlausibleAddress(aPtr) && (reinterpret_cast<std::uintptr_t>(aPtr) & 7) == 0;
 }
 
 // Unified cadence for repeating-event logs: the first LogHead occurrences,
@@ -389,6 +503,70 @@ void ReportWriterHits()
 }
 
 // ---------------------------------------------------------------------------
+// Fallback binding validation (unrecognised game build only).
+// The writer exists to keep the hint device field equal to what the provider
+// getter returns, so the two chains can be checked against each other while
+// the writer runs untouched. Sampling happens in pass-through: nothing is
+// suppressed, latched or written until the offsets check out.
+// ---------------------------------------------------------------------------
+std::uint32_t* HintDeviceField(); // Layer 3
+
+void SampleBinding(std::uint32_t aGetterValue)
+{
+    bool inRange = aGetterValue <= EInputDevice_Max;
+    bool match = false;
+
+    auto* field = HintDeviceField();
+    std::uint32_t device = 0;
+    if (field && SafeReadU32(field, &device))
+    {
+        inRange = inRange && device <= EInputDevice_Max;
+        match = device == aGetterValue;
+    }
+    else
+    {
+        inRange = false;
+    }
+
+    if (inRange)
+    {
+        ++g_bindingInRange;
+    }
+    if (match)
+    {
+        ++g_bindingMatches;
+    }
+
+    if (++g_bindingSamples != BindingSamplesNeeded)
+    {
+        return; // still sampling, or the verdict is already in
+    }
+
+    // Pass = every sample had both chains inside the enum range, and at least
+    // one saw them agree (proving the two offsets describe the same logical
+    // value). Not every sample has to agree: the writer has an early-out
+    // branch that leaves the field untouched for some device types.
+    const auto inRangeTotal = g_bindingInRange.load();
+    const auto matchTotal = g_bindingMatches.load();
+    const bool ok = inRangeTotal == BindingSamplesNeeded && matchTotal > 0;
+    g_bindingCheck.store(ok ? BindingCheck::Trusted : BindingCheck::Failed);
+
+    if (ok)
+    {
+        g_sdk->logger->InfoF(g_handle, "fallback offsets verified over %d samples - fix engaged",
+                             BindingSamplesNeeded);
+    }
+    else
+    {
+        g_sdk->logger->WarnF(g_handle,
+                             "fallback offsets FAILED verification (%d/%d samples in range, %d matches) - writer "
+                             "suppression and latch stay DISABLED for safety; script-side stickiness is still "
+                             "active. Check for a MixedInputFix update built for this game version.",
+                             inRangeTotal, BindingSamplesNeeded, matchTotal);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Layer 1: writer suppression.
 // Hook on the single steady-state writer of [[InkSystem]+0x210]+0x1E0
 // (InkSystem method, 2.31: 0x140269954). Mirrors the writer's own value
@@ -399,8 +577,17 @@ void ReportWriterHits()
 // ---------------------------------------------------------------------------
 void DeviceWriter_Detour(void* aInkSystem)
 {
+    const auto check = g_bindingCheck.load(std::memory_order_relaxed);
+    if (check == BindingCheck::Failed)
+    {
+        g_writerOriginal(aInkSystem); // offsets rejected: stay out of the way
+        return;
+    }
+    const bool unverified = check != BindingCheck::Trusted;
+
     void* provider = nullptr;
-    if (!SafeReadPtr(static_cast<std::uint8_t*>(aInkSystem) + Off_DeviceProvider, &provider) || !provider)
+    if (!SafeReadPtr(static_cast<std::uint8_t*>(aInkSystem) + g_offDeviceProvider, &provider) || !provider ||
+        (unverified && !PlausiblePointer(provider)))
     {
         g_writerOriginal(aInkSystem);
         return;
@@ -408,14 +595,23 @@ void DeviceWriter_Detour(void* aInkSystem)
 
     void* vtbl = nullptr;
     void* getter = nullptr;
-    if (!SafeReadPtr(provider, &vtbl) || !vtbl ||
-        !SafeReadPtr(static_cast<std::uint8_t*>(vtbl) + VtblOff_GetDeviceValue, &getter) || !getter)
+    if (!SafeReadPtr(provider, &vtbl) || !vtbl || (unverified && !PlausiblePointer(vtbl)) ||
+        !SafeReadPtr(static_cast<std::uint8_t*>(vtbl) + g_vtblGetDeviceValue, &getter) || !getter ||
+        (unverified && !PlausibleAddress(getter)))
     {
         g_writerOriginal(aInkSystem);
         return;
     }
 
     const auto newVal = reinterpret_cast<std::uint32_t (*)(void*)>(getter)(provider);
+
+    if (unverified)
+    {
+        // Offsets not confirmed for this build: run vanilla and measure.
+        g_writerOriginal(aInkSystem);
+        SampleBinding(newVal);
+        return;
+    }
 
     if (g_cfgVerbose)
     {
@@ -558,15 +754,21 @@ std::uint32_t* HintDeviceField()
         return nullptr;
     }
     void* manager = nullptr;
-    if (!SafeReadPtr(reinterpret_cast<const std::uint8_t*>(inkSystem) + Off_HintManager, &manager) || !manager)
+    if (!SafeReadPtr(reinterpret_cast<const std::uint8_t*>(inkSystem) + g_offHintManager, &manager) || !manager ||
+        (g_bindingCheck.load(std::memory_order_relaxed) != BindingCheck::Trusted && !PlausiblePointer(manager)))
     {
         return nullptr;
     }
-    return reinterpret_cast<std::uint32_t*>(reinterpret_cast<std::uint8_t*>(manager) + Off_HintDevice);
+    return reinterpret_cast<std::uint32_t*>(reinterpret_cast<std::uint8_t*>(manager) + g_offHintDevice);
 }
 
 void LatchDevice(const char* aWhere)
 {
+    if (g_bindingCheck.load(std::memory_order_relaxed) != BindingCheck::Trusted)
+    {
+        return; // offsets unconfirmed for this build: never write, never arm diag
+    }
+
     auto* field = HintDeviceField();
     if (!field)
     {
@@ -690,6 +892,45 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
             return true;
         }
 
+        // Select the offset set for this game build. An exact table match is
+        // trusted outright; anything else falls back to the newest known row
+        // and has to prove itself at runtime (see BindingCheck / SampleBinding).
+        RED4ext::v1::FileVer gameVer{};
+        const bool gameVerKnown = GetGameFileVersion(gameVer);
+        char gameVerStr[64];
+        if (gameVerKnown)
+        {
+            sprintf_s(gameVerStr, "%u.%u.%u.%u", static_cast<unsigned>(gameVer.major),
+                      static_cast<unsigned>(gameVer.minor), static_cast<unsigned>(gameVer.build),
+                      static_cast<unsigned>(gameVer.revision));
+        }
+        else
+        {
+            strcpy_s(gameVerStr, "unknown");
+        }
+
+        g_binding = &kBindings[BindingCount - 1];
+        if (gameVerKnown)
+        {
+            for (const auto& binding : kBindings)
+            {
+                if (binding.version == gameVer)
+                {
+                    g_binding = &binding;
+                    g_bindingExact = true;
+                    break;
+                }
+            }
+        }
+        g_offHintManager = g_binding->hintManager;
+        g_offHintDevice = g_binding->hintDevice;
+        g_offDeviceProvider = g_binding->deviceProvider;
+        g_vtblGetDeviceValue = g_binding->vtblGetDeviceValue;
+        if (!g_bindingExact)
+        {
+            g_bindingCheck.store(BindingCheck::Sampling);
+        }
+
         {
             wchar_t marker[MAX_PATH]{};
             swprintf_s(marker, L"%sMixedInputFix.diag", dir);
@@ -724,13 +965,22 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
         }
 
         aSdk->logger->InfoF(aHandle,
-                            "MixedInputFix %s active (mode:%s writer:%s scriptKBM:%s scriptPad:%s scriptPS5:%s "
-                            "latch:%s+%s%s)",
-                            VersionStr, g_cfgMode == StickyMode::Controller ? "controller" : "kbm",
+                            "MixedInputFix %s active (mode:%s game:%s offsets:%s/%s writer:%s scriptKBM:%s "
+                            "scriptPad:%s scriptPS5:%s latch:%s+%s%s)",
+                            VersionStr, g_cfgMode == StickyMode::Controller ? "controller" : "kbm", gameVerStr,
+                            g_binding->label, g_bindingExact ? "exact" : "fallback",
                             g_writerTarget ? "on" : "OFF", g_lastKBMTarget ? "on" : "OFF",
                             g_lastPadTarget ? "on" : "OFF", g_lastPS5PadTarget ? "on" : "OFF",
                             g_refreshTarget ? "on" : "OFF", g_pieTarget ? "on" : "OFF",
                             g_cfgVerbose ? " verbose" : "");
+        if (!g_bindingExact)
+        {
+            aSdk->logger->WarnF(aHandle,
+                                "game build %s is not in the offset table - trying the newest known offsets (%s) "
+                                "and verifying them over the first %d device updates; nothing is suppressed or "
+                                "written until they check out",
+                                gameVerStr, g_binding->label, BindingSamplesNeeded);
+        }
         if (g_cfgMode == StickyMode::KBM)
         {
             aSdk->logger->Info(aHandle, "kbm mode: UI device locked to keyboard/mouse from boot");
