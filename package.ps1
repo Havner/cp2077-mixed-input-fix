@@ -20,7 +20,20 @@ Copy-Item (Join-Path $root 'MixedInputFix.ini') $plugin
 
 $zip = Join-Path $root "build\MixedInputFix-$version.zip"
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $staging 'red4ext') -DestinationPath $zip
+
+# 7-Zip, not Compress-Archive: Windows PowerShell 5.1 stores entry paths with
+# backslashes, which the zip format does not allow (APPNOTE 4.4.17.1 - forward
+# slashes only). Windows Explorer tolerates it, but spec-following extractors -
+# Linux/Steam Deck unzip, some mod managers - see one file literally named
+# "red4ext\plugins\..." and drop it in the game root instead of unpacking it.
+Push-Location $staging
+try {
+    7z a -tzip -mx=9 $zip red4ext | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+}
+finally {
+    Pop-Location
+}
 Remove-Item $staging -Recurse -Force
 
 Write-Host "Packaged $zip"
