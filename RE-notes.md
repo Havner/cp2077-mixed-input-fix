@@ -204,6 +204,65 @@ Related script symbols if ever needed again: `InputSchemesDef` blackboard
 `OnInputSchemeUpdated` (scheme, not device), native widget controller
 `InputHintManagerGameController`.
 
+## Known side effect: menu shortcut keys in controller mode (2026-07-22)
+
+Reported on Nexus as "MAP BUTTON BUG" (closed *not a bug*): with the plugin in
+`controller` mode, tapping M/J/P/K/I no longer opens map/journal/perks/
+crafting/inventory. Holding M still opens the map; the other four do nothing at
+all. This is inherent to pinning, not a defect — but the *why* is worth writing
+down, because the report will recur.
+
+The gate is `inGameMenuGameController.swift:225-234`:
+
+```swift
+isPlayerLastUsedKBM = this.GetPlayerControlledObject().PlayerLastUsedKBM();
+if HOLD_COMPLETE && !isPlayerLastUsedKBM || BUTTON_RELEASED && isPlayerLastUsedKBM {
+    if OpenMapMenu | OpenJournalMenu | OpenPerksMenu | OpenInventoryMenu { OpenShortcutMenu(...) }
+    else if OpenCraftingMenu { TryOpenCraftingMenu(...) }
+```
+
+Pinning forces `PlayerLastUsedKBM()` false, so only the hold branch survives.
+Two facts from the game's own input config explain the rest:
+
+- `r6/config/inputUserMappings.xml:267-296` — `OpenHubMenu` **and**
+  `OpenMapMenu` are both bound to `IK_Pad_Start` (and `IK_PS4_TOUCH_PRESS`).
+  That shared physical button is the entire reason the device check exists:
+  tap = hub menu, hold = map. Scripts have no per-event device information
+  (`ListenerAction` exposes only `GetName`/`GetType`/`GetValue`/
+  `IsButtonJustPressed`/`IsButtonJustReleased`/`IsAction` — verified across all
+  277 call sites), so the last-used-device flag *is* the disambiguation
+  mechanism. Journal/perks/crafting/inventory are keyboard-only (`IK_J`/`IK_P`/
+  `IK_K`/`IK_I`, no pad binding at all).
+- `r6/config/inputContexts.xml:1436` and `:2196+` — of the five actions, only
+  `OpenMapMenu` declares a `<hold timeout="0.4">` and lists
+  `BUTTON_HOLD_COMPLETE` in its `acceptedEvents`; the others accept
+  `BUTTON_PRESSED`/`BUTTON_RELEASED` only. They therefore **cannot emit a hold
+  event under any circumstances**, so when pinned both branches are unreachable
+  and they are dead on tap and on hold alike.
+
+That second point is arguably a latent CDPR bug the plugin merely exposes: the
+script assumes every action in that list has a working hold path, and four of
+them do not. Vanilla hides it because `isKBM` flips true the moment the
+keyboard is touched, so the RELEASED branch always covers those four.
+
+Fixing this belongs in a **companion redscript mod**, not here — it is a
+preference change, needs a redscript dependency, and touching game scripts is
+outside this plugin's native-only design. Sketch, if it is ever built:
+`@wrapMethod(gameuiInGameMenuGameController) OnAction`, purely additive (the
+vanilla RELEASED branch never fires while pinned), guarded by
+`if !PlayerLastUsedKBM()` so it stays inert in `kbm` mode and unpinned vanilla.
+Journal/perks/inventory/crafting can open on `BUTTON_RELEASED` unconditionally
+— no pad binding and no possible hold event means no double-fire risk. The map
+is the only ambiguous case: `OpenMapMenu` does accept `BUTTON_RELEASED` and
+Start is bound to it, so an unconditional handler would open hub *and* map on
+every Start tap. Discriminator that needs no device info: a pad Start press
+fires `OpenHubMenu` and `OpenMapMenu` together, whereas `IK_M` fires only
+`OpenMapMenu` — so defer the open briefly (the pattern already used at
+`:217 DelayedHandleQuickLoad`) and cancel if `OpenHubMenu` arrived in the same
+input frame, or if `HOLD_COMPLETE` already fired this press cycle. The
+same-frame coincidence is inferred from the binding table and should be
+confirmed with a small logging redscript before relying on it.
+
 ## Porting to a new game patch
 
 The plugin resolves functions via RED4ext address-library hashes, which survive

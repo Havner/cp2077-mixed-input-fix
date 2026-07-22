@@ -81,6 +81,23 @@ each one read whichever device happened to send the last input event, so
 behavior like dodge-exit crouching flip-flopped mid-play. The plugin makes
 all of them deterministic and mutually consistent with the chosen mode.
 
+### Keyboard menu shortcuts (controller mode)
+
+One consequence is worth calling out. While the UI is pinned to the gamepad,
+the keyboard menu keys stop responding to a tap: holding `M` still opens the
+map, but `J`/`P`/`K`/`I` do nothing at all. The game gates those five actions
+on the last-used device and picks the *hold* variant for a gamepad, because
+the pad's Start button opens the player menu on tap and the map on hold - and
+of the five, only the map declares a hold event, so the rest are left with no
+working path. Not a plugin bug; the derivation is in
+[RE-notes.md](RE-notes.md).
+
+The optional `MixedInputMenuKeys.reds` (own download, own version) restores
+them without altering the Start button. Copy it to
+`<game>/r6/scripts/MixedInputMenuKeys/`; it needs
+[redscript](https://github.com/jac3km4/redscript), and it is inert unless
+something pins the device, so it is safe to leave installed.
+
 ## Verify
 
 Check `<game>/red4ext/logs/mixedinputfix-*.log`:
