@@ -98,6 +98,29 @@ them without altering the Start button. Copy it to
 [redscript](https://github.com/jac3km4/redscript), and it is inert unless
 something pins the device, so it is safe to leave installed.
 
+### Crouch and dodge with a second analog device
+
+Separate from the pin - and present in vanilla, reproducible with
+`enabled=false` - if a second analog device is active while you play (the mouse
+in `controller` mode, a stick/analog in `kbm` mode) the game's native input
+layer can drop **crouch and dodge specifically** while that device streams;
+every other action still taps fine. The button-to-action mapping is resolved in
+layers - the default layer alone for KBM, or the default layer plus one selected
+controller layout (Legacy/Agile/Alternative) for a gamepad - and the pin does
+not govern that resolver, so the non-pinned device's stream makes it re-layer
+and lose bindings, or their release edges, that live only in the momentarily
+inactive layer. The controller layouts also behave differently at this native
+level, by a mechanism we have not fully reverse-engineered.
+
+Workaround for `kbm` mode: set the controller layout to **Alternative** (crouch
+and dodge become separate single-press buttons), then in
+`r6/config/inputUserMappings.xml` add your keyboard crouch key to
+`ToggleCrouch_Button_Alternative` and `Dive_Button_Alternative`, and your dodge
+key to `Dodge_Button_Alternative`. The `controller`-mode mirror is confirmed
+fixable the same way - give the pad's crouch/dodge separate single-press buttons
+in the default layer (mirror Alternative onto it) - though that is a heavier
+edit to the base controller layout. Full derivation in [RE-notes.md](RE-notes.md).
+
 ## Verify
 
 Check `<game>/red4ext/logs/mixedinputfix-*.log`:

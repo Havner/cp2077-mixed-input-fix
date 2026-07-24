@@ -263,6 +263,117 @@ input frame, or if `HOLD_COMPLETE` already fired this press cycle. The
 same-frame coincidence is inferred from the binding table and should be
 confirmed with a small logging redscript before relying on it.
 
+## Known issue: crouch/dodge loss under simultaneous dual-device input (vanilla, 2026-07-24)
+
+Reported on Nexus for `kbm` mode: with an analog stick used for movement while
+KBM is the primary device, crouch and dodge become unreliable (character stuck
+crouched, or failing to crouch/dodge at all), which makes `kbm` mode largely
+unusable. The mirror exists in `controller` mode: moving the mouse to look
+around while on a gamepad makes the crouch button do nothing until the mouse
+stops.
+
+**It is a vanilla bug**, reproduced identically with the plugin disabled
+(`enabled=false`), and it is confined to crouch/dodge (and, in some layouts,
+scan/quickmelee) — every other action taps fine from one device while the other
+streams analog input. So it is neither the scripts nor the pin: the crouch/dodge
+PSM enter-conditions gate purely on action states
+(`IsActionJustTapped(n"ToggleCrouch")` / `IsActionJustPressed(n"Crouch")` /
+`IsActionJustTapped(n"Dodge")`, `locomotionTransitions.swift:622-651`), whose
+only device branch is `PlayerLastUsedKBM()` (already pinned) plus the
+`InputSchemes.Scheme` *preference* (LEGACY/AGILE/ALTERNATIVE, `orphans.swift:3131`,
+constant during play).
+
+### What the probe showed
+
+Diagnostic: a redscript `PlayerPuppet.OnAction` listener (`@wrapMethod`, registered
+via `OnGameAttached`) logging name/type/value/JustPressed/JustReleased for
+Crouch/ToggleCrouch/Dodge/Dodge{Forward,Back,Left,Right}/QuickMelee/Jump. Kept
+out of the shipped mod.
+
+- **Controller mode, Alternative layout, mouse flood.** Baseline: R3 →
+  `ToggleCrouch`, B → `Dodge` (the Alternative overlay). Under flood: R3 emits
+  **`QuickMelee`** (its Legacy/base position) and B emits `ToggleCrouch` **and**
+  `Dodge` together (the merged base binding). Press *and* release both arrive
+  cleanly — nothing is dropped; the pad has simply been **re-layered** off the
+  selected overlay onto the default layer.
+- **KBM mode, stick flood.** The KBM crouch key delivers `PRESSED` but the
+  matching `RELEASED` is withheld until a context teardown (`RELEASE_ALL`,
+  `inputContexts.xml:1367`) flushes it seconds later — the action latches held.
+  The binding is present in the default layer, so this is a lost *edge*, not a
+  missing binding. Layout changes the outcome: LEGACY crouches but will not
+  dodge (native double-tap), ALTERNATIVE does both — and even after the KBM keys
+  are added to every layout's variant, LEGACY dodge still fails.
+
+### Mechanism (as far as we tracked it)
+
+The button->action mapping is resolved in **layers**: the default layer alone
+for KBM, or the default layer plus **one** selected controller layout
+(Legacy/Agile/Alternative) for a gamepad. The plugin pins the UI / last-used
+device (the InkSystem field and the `PlayerLastUsed*` natives) but **not** this
+mapping resolver — which is why the bug is identical with the plugin on or off.
+When the non-pinned device streams input the resolver re-layers, and any binding
+that lived only in the momentarily-inactive layer — or its release edge — is
+lost.
+
+The controller layouts additionally behave **differently at the native level**:
+the same KBM `ToggleCrouch` key emitted a `HOLD_COMPLETE` under one layout and
+not another, even though `inputContexts.xml` contains no `<hold>` for
+`ToggleCrouch` (only for `Crouch`, `:1385`) and draws no per-layout distinction.
+So the per-scheme modifier behaviour (LEGACY's tap/double-tap merge vs
+ALTERNATIVE's two straight single-press buttons) is applied *above* the base XML
+— native, or a scheme definition we did not locate. This layer-dependent native
+step was the remaining unknown; the quickmelee test below narrows it to a generic
+per-button tap/hold arbitration (auto-engaged whenever one physical button hosts
+both a tap and a hold action), so the layout's only role is deciding which
+buttons are double-mapped. The workaround sidesteps it either way.
+
+### Workaround (kbm mode) and why it works
+
+Set the controller layout to **Alternative**, and in `inputUserMappings.xml` add
+the player's keyboard crouch key to `ToggleCrouch_Button_Alternative` and
+`Dive_Button_Alternative`, and their dodge key to `Dodge_Button_Alternative`.
+Two independent reasons it holds up:
+
+- Alternative puts crouch and dodge on **separate single-press buttons** (R3 and
+  B), so there is no tap/hold/double-tap classifier to corrupt — the same
+  single-edge shape KBM already uses. LEGACY/AGILE keep them merged on one
+  button and stay broken regardless of bindings.
+- The flood reverts to the selected scheme's (pad-only) variant, so a KBM key
+  not listed there loses its release edge; listing it there keeps it alive.
+
+The mirror fix for `controller` mode (crouch on R3 dying under mouse-look) is the
+analogous edit in the reverted-to default layer, and is **confirmed** (2026-07-24):
+point the default `ToggleCrouch_Button` and `Dive_Button` at `IK_Pad_RightThumb`
+and `QuickMelee_Button` at `IK_Pad_LeftShoulder` — i.e. make the default pad
+layout mirror Alternative, so crouch/dodge land on separate single-press buttons
+(Dodge is already on B, so it needs no change). With that, R3 crouches while the
+mouse floods. It is a heavier edit than the kbm workaround — it rewrites the base
+controller layout rather than one variant — so it is left to individual setups
+rather than shipped. A true fix for either side would need a native hook holding
+the pinned device's mapping layer applied while the other device streams, which
+is outside this plugin's native-only, UI-pinning scope.
+
+Residual, and the cleanest confirmation of the mechanism: Alternative frees the
+crouch/dodge buttons by merging **quickmelee + scan** onto LeftShoulder (tap =
+quickmelee via `IsActionJustTapped(n"QuickMelee")`, `weaponTransitions.swift:1191`,
+whose `CanQuickMelee` has no device gate; hold = `VisionHold`,
+`inputContexts.xml:1413`). Under mouse flood the probe logs `QuickMelee`
+PRESSED/RELEASED **identically to the non-flood case** — the raw edges are intact
+— yet no quickmelee fires and scan wins every time. Commenting the scan binding
+off LeftShoulder (leaving quickmelee alone on the button) makes quickmelee fire
+under flood again. So the casualty is not `IsActionJustTapped` in the abstract,
+and there is nothing quickmelee-specific in native: it is a **generic per-button
+tap-vs-hold arbitration the engine auto-engages only when one physical button
+hosts both a tap action and a hold action** (here quickmelee-tap +
+`VisionHold`-hold). That arbitration collapses to the hold side under flood (scan
+wins); a button carrying a single action needs no arbitration and its tap
+survives — which is exactly why Alternative's *separated* crouch/dodge work while
+its still-merged quickmelee/scan does not, and what the "per-layout native step"
+above really reduces to. Not separately fixable in Alternative — un-merging
+quickmelee would need its own dedicated single-press button, which is exactly the
+button Alternative spent to split crouch/dodge; a controller has no spare for all
+four. The scheme only lets you choose which pair eats the arbitration.
+
 ## Porting to a new game patch
 
 The plugin resolves functions via RED4ext address-library hashes, which survive
