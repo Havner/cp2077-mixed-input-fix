@@ -128,6 +128,7 @@ struct GameBinding
 // before Main() runs.
 const GameBinding kBindings[] = {
     {RED4EXT_V1_RUNTIME_VERSION_2_31, "2.31", 0x210, 0x1E0, 0x300, 0x218},
+    {RED4EXT_V1_RUNTIME_VERSION_2_50, "2.5", 0x210, 0x1F8, 0x300, 0x228},
 };
 constexpr std::size_t BindingCount = sizeof(kBindings) / sizeof(kBindings[0]);
 
@@ -145,7 +146,9 @@ constexpr std::uint32_t EInputDevice_KBD_MOUSE = 1;
 // PS5 pad. The game's own PlayerLastUsedPS5Pad handler is exactly
 // `GetLastUsedDevice() == 9`, which the PS5Pad hook mirrors.
 constexpr std::uint32_t EInputDevice_PROSPERO = 9;
-constexpr std::uint32_t EInputDevice_Max = 9; // EID_COUNT == 10
+// Highest PC pad. 2.5 added NINTENDO_TOUCH = 10 (EID_COUNT 10 -> 11), a
+// Switch 2 device that never occurs on PC, so it stays outside the pad range.
+constexpr std::uint32_t EInputDevice_Max = 9;
 
 // ---------------------------------------------------------------------------
 // State

@@ -410,6 +410,18 @@ patches — but three things must be re-verified per patch:
    `Scripting/Natives/Generated/input/EInputDevice.hpp` (KBD_MOUSE=1 since
    forever; EID_COUNT bound used for the sanity filter).
 
+**2.5 port (2026-10-26, file version 3.0.88.46235).** All seven hashes still
+resolved; the 2.31 offsets failed fallback verification (0/10 in range). The
+writer (now `0x140190a80`) is instruction-for-instruction the same shape with
+two moved displacements: field `mgr+0x1E0 -> +0x1F8`, provider vfuncs shifted
+by 0x10 (id getter `+0x220 -> +0x230`, value getter `+0x218 -> +0x228`);
+`+0x210`/`+0x300`/`+0x310`/`+0x318` unchanged. The hint refresh (`0x140787680`)
+confirms `mov r12d,[rdi+0x1f8]; cmp r12d,1`. The three script thunks keep their
+`(ctx, frame, out*, rtti)` shape (PS5 still `== 9`). Enum gained
+`NINTENDO_TOUCH = 10` (EID_COUNT 11) — Switch 2 only, left outside the pad
+range. Fastest re-derivation: dumpfunc.py the *writer* — one function shows
+all four offsets.
+
 ## Status 2026-07-19 (post 2h test) and the world-map hint issue
 
 2h mixed-input gameplay session with v0.6: **no freeze** (previously 20-60 min).
