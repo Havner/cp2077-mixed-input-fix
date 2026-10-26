@@ -1,5 +1,5 @@
 # Package the Nexus release zips into build/:
-#   MixedInputFix-<version>.zip       red4ext/plugins/MixedInputFix/{dll,ini}
+#   MixedInputFix-<version>.zip       red4ext/plugins/MixedInputFix/{dll,ini,scripts/*.reds}
 #   MixedInputMenuKeys-<version>.zip  r6/scripts/MixedInputMenuKeys/*.reds
 # Both extract directly into the main game folder. The companion redscript mod
 # ships as a separate optional file on Nexus, so it gets its own archive and
@@ -44,6 +44,7 @@ Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $plugin | Out-Null
 Copy-Item $dll $plugin
 Copy-Item (Join-Path $root 'MixedInputFix.ini') $plugin
+Copy-Item (Join-Path $root 'scripts') $plugin -Recurse
 New-ReleaseZip $staging 'red4ext' (Join-Path $root "build\MixedInputFix-$version.zip")
 
 # --- the optional companion redscript mod ---------------------------------

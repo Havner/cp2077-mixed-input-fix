@@ -43,7 +43,17 @@
  * gamepad are suppressed instead, and the script natives answer
  * keyboard/mouse; active from boot since KBD_MOUSE is the field's boot
  * state. Both modes pin the field to a constant, so both remove the
- * flip churn that causes the freeze.
+ * flip churn that causes the freeze. "inhibited" pins nothing (vanilla
+ * behaviour) while the plugin keeps observing.
+ *
+ * Runtime mode switching: optional redscript mods can change the mode
+ * through the script API in scripts/MixedInputFix.Global.reds (e.g. inhibit in
+ * photo mode, controller in vehicles). The ini mode is only the initial one
+ * and is restored whenever the player detaches (session end/load). A newly
+ * set mode stays disengaged - vanilla - until the writer lets one real
+ * input of the target device through, so every switch is a normal game
+ * transition with its broadcasts, never a silent field write. Controller
+ * mode at boot is the same rule: vanilla until the first gamepad input.
  *
  * Game builds: the hooks resolve through RED4ext's address library and are
  * patch-stable, but the struct offsets are not. The plugin reads the game
@@ -209,14 +219,22 @@ constexpr int BindingSamplesNeeded = 10;
 // ---------------------------------------------------------------------------
 // Config: MixedInputFix.ini next to the DLL (missing file = defaults)
 // ---------------------------------------------------------------------------
-enum class StickyMode
+// Values are part of the script API (MixedInputFixMode in MixedInputFix.Global.reds).
+enum class StickyMode : std::uint8_t
 {
-    Controller, // pin UI to the last used gamepad (armed by first gamepad input)
-    KBM,        // pin UI to keyboard/mouse (active from boot)
+    Inhibited = 0,  // pin nothing - vanilla behaviour, observation only
+    Controller = 1, // pin UI to the last used gamepad
+    KBM = 2,        // pin UI to keyboard/mouse
 };
 
+const char* ModeName(StickyMode aMode)
+{
+    constexpr const char* names[] = {"inhibited", "controller", "kbm"};
+    return names[static_cast<std::uint8_t>(aMode)];
+}
+
 bool g_cfgEnabled = true;
-StickyMode g_cfgMode = StickyMode::Controller;
+StickyMode g_cfgMode = StickyMode::Controller; // initial mode, and ResetMode() target
 bool g_cfgVerbose = false;
 
 bool ParseBool(const char* aValue, bool aDefault)
@@ -267,6 +285,10 @@ void LoadConfig(const wchar_t* aDir)
                      _stricmp(value, "pad") == 0)
             {
                 g_cfgMode = StickyMode::Controller;
+            }
+            else if (_stricmp(value, "inhibited") == 0)
+            {
+                g_cfgMode = StickyMode::Inhibited;
             }
             // unknown value: keep default
         }
@@ -389,13 +411,80 @@ bool ShouldLog(std::uint64_t aCount)
     return aCount <= LogHead || aCount % LogEvery == 0;
 }
 
-// Remember the last gamepad-family device; announce the first sighting.
+// Remember the last gamepad-family device (in every mode, so a later switch
+// to controller mode knows it); announce the first sighting.
 void NotePadDevice(std::uint32_t aDevice)
 {
     g_lastPadDevice.store(aDevice);
     if (!g_padAnnounced.exchange(true))
     {
-        g_sdk->logger->InfoF(g_handle, "gamepad detected (device %u): UI device is now locked to gamepad", aDevice);
+        g_sdk->logger->InfoF(g_handle, "gamepad detected (device %u)", aDevice);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime mode. Starts at the ini mode; the script API can change it. The
+// mode and its "engaged" flag share one atomic: a mode change always lands
+// disengaged, and engaging is a compare-exchange against the disengaged
+// state, so a hook engaging the old mode can never race past a concurrent
+// switch from the script thread.
+// Engaged = the field has been seen at the mode's pinned device, so pinning
+// it there starts from a state the game itself broadcast. Until then all
+// three layers behave as vanilla. Inhibited never engages.
+// ---------------------------------------------------------------------------
+constexpr std::uint8_t ModeEngagedBit = 0x80;
+std::atomic<std::uint8_t> g_modeState{0};
+
+struct ModeState
+{
+    StickyMode mode;
+    bool engaged;
+};
+
+ModeState LoadMode()
+{
+    const auto state = g_modeState.load(std::memory_order_relaxed);
+    return {static_cast<StickyMode>(state & ~ModeEngagedBit), (state & ModeEngagedBit) != 0};
+}
+
+void SetMode(StickyMode aMode, const char* aSource)
+{
+    const auto prev = LoadMode().mode;
+    if (prev == aMode)
+    {
+        return; // unchanged: keep the engaged state
+    }
+    g_modeState.store(static_cast<std::uint8_t>(aMode));
+    g_sdk->logger->InfoF(g_handle, "mode %s -> %s (%s)", ModeName(prev), ModeName(aMode), aSource);
+}
+
+bool IsPad(std::uint32_t aDevice)
+{
+    return aDevice > EInputDevice_KBD_MOUSE && aDevice <= EInputDevice_Max;
+}
+
+// The device a mode pins the UI to, and the one it keeps out. Inhibited has
+// neither, so it never engages and never suppresses.
+bool IsPinnedDevice(StickyMode aMode, std::uint32_t aDevice)
+{
+    return aMode == StickyMode::Controller ? IsPad(aDevice)
+                                           : aMode == StickyMode::KBM && aDevice == EInputDevice_KBD_MOUSE;
+}
+
+bool IsOpposingDevice(StickyMode aMode, std::uint32_t aDevice)
+{
+    return aMode == StickyMode::Controller ? aDevice == EInputDevice_KBD_MOUSE
+                                           : aMode == StickyMode::KBM && IsPad(aDevice);
+}
+
+// Called by the hooks when they observe the pinned device of a disengaged mode.
+void EngageMode(StickyMode aMode, std::uint32_t aDevice)
+{
+    auto expected = static_cast<std::uint8_t>(aMode);
+    if (g_modeState.compare_exchange_strong(expected, static_cast<std::uint8_t>(expected | ModeEngagedBit)))
+    {
+        g_sdk->logger->InfoF(g_handle, "%s mode engaged: UI device locked to %s (device %u)", ModeName(aMode),
+                             aMode == StickyMode::Controller ? "gamepad" : "keyboard/mouse", aDevice);
     }
 }
 
@@ -562,9 +651,9 @@ void SampleBinding(std::uint32_t aGetterValue)
     else
     {
         g_sdk->logger->WarnF(g_handle,
-                             "fallback offsets FAILED verification (%d/%d samples in range, %d matches) - writer "
-                             "suppression and latch stay DISABLED for safety; script-side stickiness is still "
-                             "active. Check for a MixedInputFix update built for this game version.",
+                             "fallback offsets FAILED verification (%d/%d samples in range, %d matches) - the fix "
+                             "stays DISABLED for safety (game runs vanilla). Check for a MixedInputFix update "
+                             "built for this game version.",
                              inRangeTotal, BindingSamplesNeeded, matchTotal);
     }
 }
@@ -630,31 +719,28 @@ void DeviceWriter_Detour(void* aInkSystem)
         }
     }
 
-    bool suppress = false;
-    if (g_cfgMode == StickyMode::Controller)
+    if (IsPad(newVal))
     {
-        if (newVal > EInputDevice_KBD_MOUSE && newVal <= EInputDevice_Max)
-        {
-            NotePadDevice(newVal);
-        }
-        else if (newVal == EInputDevice_KBD_MOUSE && g_lastPadDevice.load() != 0)
-        {
-            suppress = true;
-        }
-    }
-    else // StickyMode::KBM: keep the field at its KBD_MOUSE boot state
-    {
-        suppress = newVal > EInputDevice_KBD_MOUSE && newVal <= EInputDevice_Max;
+        NotePadDevice(newVal);
     }
 
-    if (suppress)
+    // A disengaged mode engages on its pinned device, which then passes
+    // through as a normal transition (write + broadcasts).
+    const auto state = LoadMode();
+    if (!state.engaged)
+    {
+        if (IsPinnedDevice(state.mode, newVal))
+        {
+            EngageMode(state.mode, newVal);
+        }
+    }
+    else if (IsOpposingDevice(state.mode, newVal))
     {
         const auto n = ++g_suppressed;
         if (g_cfgVerbose && ShouldLog(n))
         {
             g_sdk->logger->InfoF(g_handle, "[writer] suppressed switch to %s (count=%llu)",
-                                 g_cfgMode == StickyMode::Controller ? "KBM" : "gamepad",
-                                 static_cast<unsigned long long>(n));
+                                 IsPad(newVal) ? "gamepad" : "KBM", static_cast<unsigned long long>(n));
         }
         return;
     }
@@ -680,25 +766,19 @@ void ForceBoolResult(void* aRet, std::uint8_t aDesired, std::atomic<std::uint64_
     }
 }
 
-// Overrides engaged: always in KBM mode, after the first gamepad input in
-// controller mode. Returns false when the natives should stay vanilla.
+// Overrides follow the engaged mode, so scripts never disagree with the UI
+// field. Returns false when the natives should stay vanilla.
 bool ScriptDesired(std::uint8_t& aKBM, std::uint8_t& aPad, std::uint8_t& aPS5)
 {
-    if (g_cfgMode == StickyMode::KBM)
-    {
-        aKBM = 1;
-        aPad = 0;
-        aPS5 = 0;
-        return true;
-    }
-    const auto pad = g_lastPadDevice.load();
-    if (pad == 0)
+    const auto state = LoadMode();
+    if (!state.engaged)
     {
         return false;
     }
-    aKBM = 0;
-    aPad = 1;
-    aPS5 = pad == EInputDevice_PROSPERO ? 1 : 0;
+    const bool kbm = state.mode == StickyMode::KBM;
+    aKBM = kbm ? 1 : 0;
+    aPad = kbm ? 0 : 1;
+    aPS5 = !kbm && g_lastPadDevice.load() == EInputDevice_PROSPERO ? 1 : 0;
     return true;
 }
 
@@ -738,10 +818,10 @@ void LastUsedPS5Pad_Detour(void* aContext, void* aFrame, void* aRet, std::int64_
 // ---------------------------------------------------------------------------
 // Layer 3: fallback latch (watchdog).
 // Observes the device field before every hint icon resolution and once per
-// UI input pump. Remembers gamepad values (controller mode) and restores the
-// pinned value if the field ever leaves it (only possible via writes outside
-// the suppressed writer, e.g. session-init code). Also hosts the opt-in
-// watchpoint diagnostic.
+// UI input pump. Remembers gamepad values, engages a mode whose pinned device
+// the field already shows, and restores the pinned value if the field ever
+// leaves it (only possible via writes outside the suppressed writer, e.g.
+// session-init code). Also hosts the opt-in watchpoint diagnostic.
 // ---------------------------------------------------------------------------
 
 // Returns the address of the device field, or nullptr if the chain is not up.
@@ -791,26 +871,29 @@ void LatchDevice(const char* aWhere)
         return;
     }
 
-    std::uint32_t restore = 0; // 0 = nothing to do
-    if (g_cfgMode == StickyMode::Controller)
+    if (IsPad(device))
     {
-        if (device > EInputDevice_KBD_MOUSE)
-        {
-            NotePadDevice(device);
-            return;
-        }
-        const auto pad = g_lastPadDevice.load();
-        if (device == EInputDevice_KBD_MOUSE && pad != 0)
-        {
-            restore = pad;
-        }
-    }
-    else if (device > EInputDevice_KBD_MOUSE) // StickyMode::KBM
-    {
-        restore = EInputDevice_KBD_MOUSE;
+        NotePadDevice(device);
     }
 
-    if (restore != 0 && SafeWriteU32(field, restore))
+    // Field already at a disengaged mode's pinned device: engage without a
+    // write. Only an engaged mode ever restores.
+    const auto state = LoadMode();
+    if (!state.engaged)
+    {
+        if (IsPinnedDevice(state.mode, device))
+        {
+            EngageMode(state.mode, device);
+        }
+        return;
+    }
+    if (!IsOpposingDevice(state.mode, device))
+    {
+        return;
+    }
+
+    const auto restore = state.mode == StickyMode::Controller ? g_lastPadDevice.load() : EInputDevice_KBD_MOUSE;
+    if (SafeWriteU32(field, restore))
     {
         const auto n = ++g_restores;
         if (ShouldLog(n))
@@ -834,6 +917,90 @@ void ProcessInputEvents_Detour(void* aInkSystem, std::uint64_t aArg2, void* aBuf
 {
     g_pieOriginal(aInkSystem, aArg2, aBuffer);
     LatchDevice("frame");
+}
+
+// ---------------------------------------------------------------------------
+// Script API: runtime mode switching for optional redscript mods. Raw Int32
+// natives, wrapped by the MixedInputFix class and MixedInputFixMode enum in
+// scripts/MixedInputFix.Global.reds (registered with the redscript compilation in
+// Main). Registered even with enabled=0, so dependent scripts still compile -
+// they just refuse every change and report Disabled.
+// ---------------------------------------------------------------------------
+constexpr std::int32_t ScriptModeDisabled = 3; // MixedInputFixMode.Disabled, GetMode() only
+
+void Api_SetMode(RED4ext::IScriptable* aContext, RED4ext::CStackFrame* aFrame, bool* aOut, std::int64_t aRtti)
+{
+    RED4EXT_UNUSED_PARAMETER(aContext);
+    RED4EXT_UNUSED_PARAMETER(aRtti);
+    std::int32_t mode = 0;
+    RED4ext::GetParameter(aFrame, &mode);
+    aFrame->code++; // skip ParamEnd
+
+    const bool valid = mode >= static_cast<std::int32_t>(StickyMode::Inhibited) &&
+                       mode <= static_cast<std::int32_t>(StickyMode::KBM);
+    if (!valid)
+    {
+        g_sdk->logger->WarnF(g_handle, "script API: SetMode(%d) rejected - not a settable mode", mode);
+    }
+    const bool ok = g_cfgEnabled && valid;
+    if (ok)
+    {
+        SetMode(static_cast<StickyMode>(mode), "script");
+    }
+    if (aOut)
+    {
+        *aOut = ok;
+    }
+}
+
+void Api_GetMode(RED4ext::IScriptable* aContext, RED4ext::CStackFrame* aFrame, std::int32_t* aOut,
+                 std::int64_t aRtti)
+{
+    RED4EXT_UNUSED_PARAMETER(aContext);
+    RED4EXT_UNUSED_PARAMETER(aRtti);
+    aFrame->code++; // skip ParamEnd
+    if (aOut)
+    {
+        *aOut = g_cfgEnabled ? static_cast<std::int32_t>(LoadMode().mode) : ScriptModeDisabled;
+    }
+}
+
+void Api_ResetMode(RED4ext::IScriptable* aContext, RED4ext::CStackFrame* aFrame, bool* aOut, std::int64_t aRtti)
+{
+    RED4EXT_UNUSED_PARAMETER(aContext);
+    RED4EXT_UNUSED_PARAMETER(aRtti);
+    aFrame->code++; // skip ParamEnd
+    if (g_cfgEnabled)
+    {
+        SetMode(g_cfgMode, "reset to ini mode");
+    }
+    if (aOut)
+    {
+        *aOut = g_cfgEnabled;
+    }
+}
+
+void RegisterScriptApi()
+{
+    auto* rtti = RED4ext::CRTTISystem::Get();
+    const RED4ext::CBaseFunction::Flags flags = {.isNative = true, .isStatic = true};
+
+    auto* setMode = RED4ext::CGlobalFunction::Create("MixedInputFix_SetMode", "MixedInputFix_SetMode", &Api_SetMode);
+    setMode->flags = flags;
+    setMode->AddParam("Int32", "mode");
+    setMode->SetReturnType("Bool");
+    rtti->RegisterFunction(setMode);
+
+    auto* getMode = RED4ext::CGlobalFunction::Create("MixedInputFix_GetMode", "MixedInputFix_GetMode", &Api_GetMode);
+    getMode->flags = flags;
+    getMode->SetReturnType("Int32");
+    rtti->RegisterFunction(getMode);
+
+    auto* resetMode =
+        RED4ext::CGlobalFunction::Create("MixedInputFix_ResetMode", "MixedInputFix_ResetMode", &Api_ResetMode);
+    resetMode->flags = flags;
+    resetMode->SetReturnType("Bool");
+    rtti->RegisterFunction(resetMode);
 }
 
 // ---------------------------------------------------------------------------
@@ -888,12 +1055,27 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
         }
 
         LoadConfig(dir);
+
+        // Script API first: it exists in every config (stubs when disabled).
+        RED4ext::CRTTISystem::Get()->AddPostRegisterCallback(&RegisterScriptApi);
+        {
+            wchar_t scripts[MAX_PATH]{};
+            swprintf_s(scripts, L"%sscripts", dir);
+            if (!aSdk->scripts->Add(aHandle, scripts))
+            {
+                aSdk->logger->WarnF(aHandle, "could not add %ls to the redscript compilation - the script API is "
+                                             "unavailable (the fix itself is unaffected)",
+                                    scripts);
+            }
+        }
+
         if (!g_cfgEnabled)
         {
             aSdk->logger->InfoF(aHandle, "MixedInputFix %s DISABLED via MixedInputFix.ini - game runs vanilla",
                                 VersionStr);
             return true;
         }
+        g_modeState.store(static_cast<std::uint8_t>(g_cfgMode)); // disengaged
 
         // Select the offset set for this game build. An exact table match is
         // trusted outright; anything else falls back to the newest known row
@@ -970,7 +1152,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
         aSdk->logger->InfoF(aHandle,
                             "MixedInputFix %s active (mode:%s game:%s offsets:%s/%s writer:%s scriptKBM:%s "
                             "scriptPad:%s scriptPS5:%s latch:%s+%s%s)",
-                            VersionStr, g_cfgMode == StickyMode::Controller ? "controller" : "kbm", gameVerStr,
+                            VersionStr, ModeName(g_cfgMode), gameVerStr,
                             g_binding->label, g_bindingExact ? "exact" : "fallback",
                             g_writerTarget ? "on" : "OFF", g_lastKBMTarget ? "on" : "OFF",
                             g_lastPadTarget ? "on" : "OFF", g_lastPS5PadTarget ? "on" : "OFF",
@@ -983,10 +1165,6 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
                                 "and verifying them over the first %d device updates; nothing is suppressed or "
                                 "written until they check out",
                                 gameVerStr, g_binding->label, BindingSamplesNeeded);
-        }
-        if (g_cfgMode == StickyMode::KBM)
-        {
-            aSdk->logger->Info(aHandle, "kbm mode: UI device locked to keyboard/mouse from boot");
         }
         if (g_cfgVerbose)
         {
