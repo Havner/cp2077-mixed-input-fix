@@ -1,9 +1,9 @@
 # Package the Nexus release zips into build/:
 #   MixedInputFix-<version>.zip       red4ext/plugins/MixedInputFix/{dll,ini,scripts/*.reds}
-#   MixedInputMenuKeys-<version>.zip  r6/scripts/MixedInputMenuKeys/*.reds
-# Both extract directly into the main game folder. The companion redscript mod
-# ships as a separate optional file on Nexus, so it gets its own archive and
-# its own version, read from the banner comment at the top of the .reds.
+#   <Mod>-<version>.zip               r6/scripts/<Mod>/<Mod>.reds, one per mods/*.reds
+# All extract directly into the main game folder. Each optional redscript mod
+# ships as a separate file on Nexus, so it gets its own archive and its own
+# version, read from the "// <Mod> X.Y" banner comment at the top of the .reds.
 # Run build.ps1 first.
 $ErrorActionPreference = 'Stop'
 
@@ -47,12 +47,14 @@ Copy-Item (Join-Path $root 'MixedInputFix.ini') $plugin
 Copy-Item (Join-Path $root 'scripts') $plugin -Recurse
 New-ReleaseZip $staging 'red4ext' (Join-Path $root "build\MixedInputFix-$version.zip")
 
-# --- the optional companion redscript mod ---------------------------------
-$modSource = Join-Path $root 'MixedInputMenuKeys.reds'
-$modVersion = Get-SourceVersion $modSource 'MixedInputMenuKeys ([0-9.]+)'
-$modStaging = Join-Path $root 'build\package-menukeys'
-$modDir = Join-Path $modStaging 'r6\scripts\MixedInputMenuKeys'
-Remove-Item $modStaging -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $modDir | Out-Null
-Copy-Item $modSource $modDir
-New-ReleaseZip $modStaging 'r6' (Join-Path $root "build\MixedInputMenuKeys-$modVersion.zip")
+# --- the optional companion redscript mods --------------------------------
+foreach ($modSource in Get-ChildItem (Join-Path $root 'mods') -Filter '*.reds') {
+    $modName = $modSource.BaseName
+    $modVersion = Get-SourceVersion $modSource.FullName "$modName ([0-9.]+)"
+    $modStaging = Join-Path $root "build\package-$modName"
+    $modDir = Join-Path $modStaging "r6\scripts\$modName"
+    Remove-Item $modStaging -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $modDir | Out-Null
+    Copy-Item $modSource.FullName $modDir
+    New-ReleaseZip $modStaging 'r6' (Join-Path $root "build\$modName-$modVersion.zip")
+}
