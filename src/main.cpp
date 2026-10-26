@@ -201,6 +201,7 @@ std::atomic<std::uint64_t> g_restores{0};
 std::atomic<std::uint64_t> g_kbmOverrides{0};
 std::atomic<std::uint64_t> g_padOverrides{0};
 std::atomic<std::uint64_t> g_ps5PadOverrides{0};
+std::atomic<DWORD> g_writerThread{0}; // thread the game runs the writer on
 
 // Offset trust state. Stays Trusted for a build that is in kBindings, so the
 // exact-match path behaves exactly as it did before this was introduced.
@@ -669,6 +670,7 @@ void SampleBinding(std::uint32_t aGetterValue)
 // ---------------------------------------------------------------------------
 void DeviceWriter_Detour(void* aInkSystem)
 {
+    g_writerThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     const auto check = g_bindingCheck.load(std::memory_order_relaxed);
     if (check == BindingCheck::Failed)
     {
@@ -917,6 +919,24 @@ void ProcessInputEvents_Detour(void* aInkSystem, std::uint64_t aArg2, void* aBuf
 {
     g_pieOriginal(aInkSystem, aArg2, aBuffer);
     LatchDevice("frame");
+
+    // The game runs the writer only on input events that change the device,
+    // so a mode set while its pinned device is already in use would wait for
+    // the next change. While disengaged, run it every frame (through the
+    // detour, on the game's own writer thread only) so the device in use
+    // engages right away; otherwise the writer's edge detection makes this a
+    // no-op.
+    const auto state = LoadMode();
+    if (!state.engaged && state.mode != StickyMode::Inhibited &&
+        g_bindingCheck.load(std::memory_order_relaxed) == BindingCheck::Trusted &&
+        GetCurrentThreadId() == g_writerThread.load(std::memory_order_relaxed))
+    {
+        void* inkSystem = nullptr;
+        if (SafeReadPtr(g_inkSystemPtr, &inkSystem) && inkSystem)
+        {
+            DeviceWriter_Detour(inkSystem);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

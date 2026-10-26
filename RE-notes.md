@@ -138,8 +138,9 @@ if [mgr+0x1E0] != val:
 ```
 
 Both broadcast helpers are plain listener-array iterations (lock + 0x38-stride
-callback records). Single call site: `0x140269860`, a per-frame poller that
-derives the same device value itself (`[this+0xC0]` record, classification via
+callback records). Single call site: `0x140269860`, a device poller (NOT
+per-frame, as first assumed: it only runs on device-changing input events -
+see "Runtime mode switching" below) that derives the same device value itself (`[this+0xC0]` record, classification via
 `0x1404a4de8`, else default KBM) and propagates its own isKBM bool via
 `0x14026984c` *before* calling the writer — so cursor-related machinery does
 not depend on the writer running. Confirmed independently: .text byte-writes
@@ -541,6 +542,36 @@ identify *which* resource the freeze threshold tracks — that still needs a
 second observer run — but per the observer analysis the fix works by prevention
 regardless.)
 
+## Runtime mode switching (script API, 2026-10-26, 2.5)
+
+The script API (`scripts/MixedInputFix.Global.reds`) lets redscript mods
+switch between controller, kbm and inhibited at runtime. A newly set mode is
+*disengaged* (all three layers vanilla) until the device it pins is observed
+through the writer or the latch, so that the switch reaches the field as a
+normal writer transition with its broadcasts. A latch write instead would be
+the silent, broadcast-less field change behind the v0.6 world-map regression.
+
+Bug found with the vehicle example mod: on foot in kbm mode, enter the car
+with the pad (kbm suppresses that input), the mod switches to controller, the
+pad stays in use -> controller never engaged until the mouse and then the pad
+were moved again. Cause: the writer is not called per frame. 2.5 chain:
+writer `0x140190a80` <- its only caller, the poller `0x140190970` (calls the
+writer unconditionally) <- only from `0x1422fa970`, an input-event
+processor that calls the poller only under per-event device conditions
+(compares the event's device class against the current one). So a mode set
+while its pinned device is already the current one waits for the next device
+*change*, which never comes while that device stays in use.
+
+Fix: `ProcessInputEvents_Detour` (runs every UI frame) also calls
+`DeviceWriter_Detour` while the mode is disengaged (not inhibited, offsets
+trusted). It runs only on the game's own writer thread (recorded by the
+detour), so it never races the game's call. When the device in use is the
+pinned one, it engages and passes through as a real transition; otherwise the
+writer's edge detection makes it a no-op. Confirmed in game: engage now lands
+8-9 ms (one frame) after a kbm -> controller switch with the pad already in
+use, and every engage logged on the writer thread (PIE and the writer share
+it).
+
 ## Open questions / future work
 
 - All three fix layers confirmed in gameplay testing (world map fixed, cursor
@@ -555,7 +586,8 @@ regardless.)
   crash dump (`%LOCALAPPDATA%\CD Projekt Red\Cyberpunk 2077\`) would pinpoint
   it if ever needed.
 - Possible future feature: a reset hotkey so the pinned device can be
-  switched intentionally mid-session (currently: restart, or edit the ini).
+  switched intentionally mid-session. Now a small redscript mod on top of
+  the script API (see "Runtime mode switching").
 - `tools/` has the analysis scripts + recipes (see its README.md), including
   consolidated CLI versions of the one-off recon scripts used throughout
   these notes (dumpfunc/findnative/storescan/logstats).
