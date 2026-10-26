@@ -33,12 +33,17 @@ all inputs keep working exactly as before.
 ## Install
 
 1. Install [RED4ext](https://github.com/WopsS/RED4ext).
-2. Copy `MixedInputFix.dll` (and optionally `MixedInputFix.ini`) to
-   `<game>/red4ext/plugins/MixedInputFix/`.
+2. Extract the archive into the game folder, or copy its
+   `red4ext/plugins/MixedInputFix/` folder (`MixedInputFix.dll`, optional
+   `MixedInputFix.ini`, `scripts/`) there by hand.
 
-Built and tested on game version 2.31 (GOG). Expected to work on Steam and
-Epic builds of the same patch: all code addresses resolve through the game's
-address library at runtime.
+The `scripts/` folder holds the [script API](#script-api) declarations and
+needs [redscript](https://github.com/jac3km4/redscript); without redscript the
+fix itself works the same, only the API is unavailable.
+
+Built and tested on game versions 2.31 and 2.5 (GOG). Expected to work on
+Steam and Epic builds of the same patches: all code addresses resolve through
+the game's address library at runtime.
 
 Code addresses are patch-stable, struct offsets are not, so the plugin reads
 the game executable's file version at startup and picks its offsets from a
@@ -62,6 +67,11 @@ naming the hash.
     100% vanilla until a gamepad is used.
   - `kbm`: UI locks to keyboard/mouse from boot. For KBM-primary setups with
     auxiliary analog inputs (e.g. movement/driving on a stick).
+  - `inhibited`: pins nothing (vanilla behaviour) until a script mod switches
+    the mode through the [script API](#script-api).
+
+  Script mods can change the mode at runtime; it returns to this value when
+  a save is loaded or the game returns to the main menu.
 - `verbose` (default `false`) - per-event logging for debugging.
 
 ## What "pinned" means (it goes beyond visuals)
@@ -100,11 +110,8 @@ of the five, only the map declares a hold event, so the rest are left with no
 working path. Not a plugin bug; the derivation is in
 [RE-notes.md](RE-notes.md).
 
-The optional `MixedInputMenuKeys.reds` (own download, own version) restores
-them without altering the Start button. Copy it to
-`<game>/r6/scripts/MixedInputMenuKeys/`; it needs
-[redscript](https://github.com/jac3km4/redscript), and it is inert unless
-something pins the device, so it is safe to leave installed.
+The optional MixedInputMenuKeys mod restores them without altering the Start
+button - see [Optional mods](#optional-mods).
 
 ### Crouch and dodge with a second analog device
 
@@ -129,17 +136,82 @@ fixable the same way - give the pad's crouch/dodge separate single-press buttons
 in the default layer (mirror Alternative onto it) - though that is a heavier
 edit to the base controller layout. Full derivation in [RE-notes.md](RE-notes.md).
 
+## Script API
+
+Redscript mods can switch the mode at runtime, e.g. to pin the controller
+only while driving, or to get the vanilla mouse cursor in photo mode. The
+declarations ship with the plugin (`scripts/` next to the DLL):
+
+```swift
+MixedInputFix.SetMode(MixedInputFixMode.KBM);  // Inhibited / Controller / KBM
+let saved = MixedInputFix.GetMode();           // Disabled if enabled=false
+MixedInputFix.SetMode(saved);
+MixedInputFix.ResetMode();                     // back to the ini mode
+```
+
+- A new mode takes hold on the next input of its device (pad for
+  `Controller`, keyboard/mouse for `KBM`) - immediately if that device is
+  already in use. Until then the game runs vanilla, so every switch is a
+  normal device change for the UI.
+- `Inhibited` pins nothing - vanilla behaviour, including the device flipping
+  behind the freeze. Fine for occasional use (photo mode); prefer `KBM` for
+  long stretches.
+- The runtime mode is never saved. It resets to the ini mode whenever the
+  player detaches (loading a save, quitting to the main menu), so mods should
+  re-apply theirs when their situation starts again.
+- Last call wins; there is no stacking between mods. Use `GetMode()` to save
+  and restore around a temporary change.
+- With `enabled=false` every call is refused (`SetMode`/`ResetMode` return
+  `false`, `GetMode` returns `Disabled`).
+- To compile without the plugin installed, wrap calls in
+  `@if(ModuleExists("MixedInputFix"))`.
+
+From the [Cyber Engine Tweaks](https://github.com/maximegmd/CyberEngineTweaks)
+console, call the underlying natives with the mode as a number (0 =
+inhibited, 1 = controller, 2 = kbm, 3 = disabled from `GetMode` only):
+
+```lua
+Game.MixedInputFix_SetMode(2)          -- kbm
+print(Game.MixedInputFix_GetMode())    -- 2
+Game.MixedInputFix_ResetMode()         -- back to the ini mode
+```
+
+The same calls can be bound to a CET hotkey or used from a CET mod.
+
+## Optional mods
+
+Small redscript mods in [mods/](mods/), each a separate download with its own
+version. Copy `<Mod>.reds` to `<game>/r6/scripts/<Mod>/` (or extract its
+archive into the game folder). All need
+[redscript](https://github.com/jac3km4/redscript).
+
+- **MixedInputMenuKeys** - restores the keyboard menu shortcuts in controller
+  mode (see [above](#keyboard-menu-shortcuts-controller-mode)). Inert unless
+  something pins the device, so it is safe to leave installed.
+- **MixedInputInhibitOnPhotoMode** - inhibits the plugin while photo mode is
+  open (vanilla photo mode with the mouse cursor) and restores the previous
+  mode on exit. Uses the script API.
+- **MixedInputVehicleControllerFpsKbm** - controller mode in vehicles, kbm
+  mode on foot: drive with the pad, fight with the mouse. Uses the script
+  API. Deliberately minimal: until you first leave a vehicle, the ini mode
+  applies.
+
+The last two are also meant as examples of the script API.
+
 ## Verify
 
 Check `<game>/red4ext/logs/mixedinputfix-*.log`:
 
-- startup: `MixedInputFix 1.1.0 active (mode:controller game:3.0.80.51928
-  offsets:2.31/exact writer:on scriptKBM:on scriptPad:on scriptPS5:on
+- startup: `MixedInputFix 1.1.0 active (mode:controller game:3.0.88.46235
+  offsets:2.5/exact writer:on scriptKBM:on scriptPad:on scriptPS5:on
   latch:on+on)` - `offsets:<patch>/exact` means the plugin recognises this
   game build; `/fallback` means it is running on an unlisted one and is
   verifying the offsets it guessed (see Install)
-- first gamepad input (controller mode): `gamepad detected (device 5): UI
-  device is now locked to gamepad` (5 = XInput; other pad types 2..9)
+- first gamepad input: `gamepad detected (device 5)` (5 = XInput; other pad
+  types 2..9), and in controller mode `controller mode engaged: UI device
+  locked to gamepad (device 5)`
+- mode changes through the script API: `mode kbm -> controller (script)`,
+  then the `... mode engaged` line once that device is used
 - on exit: `session summary: suppressed=... scriptKBM=... fallbackRestores=...`
 - `[fallback:...]` warnings should be rare (session init at most); frequent
   ones mean a game patch added a new writer path - please report them.
@@ -166,9 +238,9 @@ address-library hashes (full reverse-engineering record with the derivations,
 evidence and failed approaches: [RE-notes.md](RE-notes.md)):
 
 1. **Writer suppression** (the core fix). The ink UI resolves all button-hint
-   icons from a single device field (`[[InkSystem]+0x210]+0x1E0`,
+   icons from a single device field (`[[InkSystem]+0x210]+0x1F8` in 2.5,
    `input::EInputDevice`). That field has exactly one steady-state writer, an
-   InkSystem method that polls the current device and, on change, rewrites
+   InkSystem method that reads the current device and, on change, rewrites
    the field and broadcasts device-change notifications - the flicker, and
    the per-event UI churn whose accumulation causes the freeze (reproduced
    and measured, see RE-notes). The plugin hooks the writer, derives the
@@ -198,7 +270,8 @@ evidence and failed approaches: [RE-notes.md](RE-notes.md)):
 | InkSystem instance pointer | 2635337807 | (data, not a hook) |
 
 The hashes survive game patches; the four struct offsets involved
-(`0x210`/`0x1E0`/`0x300`/vtbl `0x218`) are per-patch and may need
+(2.5: `0x210`/`0x1F8`/`0x300`/vtbl `0x228`; 2.31 had `0x1E0` and `0x218`
+for the second and fourth) are per-patch and may need
 re-derivation - the procedure is documented in RE-notes.md ("Porting to a
 new game patch") and the `tools/` directory contains the analysis scripts
 that make it a ~10 minute job.
@@ -236,10 +309,16 @@ delete the marker afterwards. The offsets feed directly into
   mixed input; with the fix, multi-hour sessions run clean at well past the
   vanilla freeze threshold with zero fallback events.
 
-- 1.1.0 (unreleased) - game-build awareness: struct offsets are selected from
-  a per-version table keyed on the executable's file version, and an unlisted
-  build falls back to the newest known offsets, verified against the running
-  game before the fix engages. Fix logic unchanged.
+- 1.1.0 - game 2.5 support, plus:
+  - game-build awareness: struct offsets are selected from a per-version
+    table keyed on the executable's file version (2.31 and 2.5), and an
+    unlisted build falls back to the newest known offsets, verified against
+    the running game before the fix engages (if they fail, the plugin stays
+    fully vanilla);
+  - [script API](#script-api) for redscript mods to switch the mode at
+    runtime, and a new `inhibited` mode;
+  - two new [optional mods](#optional-mods) built on it:
+    MixedInputInhibitOnPhotoMode and MixedInputVehicleControllerFpsKbm.
 
 ## License
 
