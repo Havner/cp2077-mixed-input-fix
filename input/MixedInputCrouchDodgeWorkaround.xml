@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<bindings>
+
+  <mapping name="ToggleCrouch_Button" type="Button" >
+    <button id="IK_Pad_RightThumb" />  <!-- ALTERNATIVE -->
+    <button id="IK_C" overridableUI="crouchToggle" />
+  </mapping>
+
+  <mapping name="Dodge_Button" type="Button" >
+    <button id="IK_Pad_B_CIRCLE" />
+    <button id="IK_LControl" overridableUI="dodgeDash" />
+  </mapping>
+
+  <mapping name="Dive_Button" type="Button" >
+    <button id="IK_Pad_RightThumb" />  <!-- ALTERNATIVE -->
+    <button id="IK_C" overridableUI="crouchToggle" />
+  </mapping>
+
+  <mapping name="QuickMelee_Button" type="Button" >
+    <button id="IK_Pad_LeftShoulder" />  <!-- ALTERNATIVE -->
+    <button id="IK_Q" overridableUI="quickmelee"/>
+  </mapping>
+
+  <!-- ALTERNATIVE -->
+  <mapping name="ToggleCrouch_Button_Alternative" type="Button" >
+    <button id="IK_Pad_RightThumb" />
+    <button id="IK_C" overridableUI="crouchToggle" />
+  </mapping>
+
+  <mapping name="Dodge_Button_Alternative" type="Button" >
+    <button id="IK_Pad_B_CIRCLE" />
+    <button id="IK_LControl" overridableUI="dodgeDash" />
+  </mapping>
+
+  <mapping name="QuickMelee_Button_Alternative" type="Button" >
+    <button id="IK_Pad_LeftShoulder" />
+    <button id="IK_Q" overridableUI="quickmelee"/>
+  </mapping>
+
+  <mapping name="Dive_Button_Alternative" type="Button" >
+    <button id="IK_Pad_RightThumb" />
+    <button id="IK_C" overridableUI="crouchToggle" />
+  </mapping>
+
+</bindings>

@@ -140,10 +140,9 @@ Game 2.5 made it worse: even with the bindings fixed, dodge (and, less often,
 crouch) stops responding while the other device streams. The engine still
 delivers each press but drops its release, and the game only acts on a *tap*
 (press + quick release), so nothing happens until the stream stops. The
-optional, **heavily experimental** MixedInputOnPress mod makes dodge and toggle
-crouch act on the press instead; together with the edited
-`inputUserMappings.xml` it ships as MixedInputCrouchDodgeWorkaround - see
-[Optional mods](#optional-mods).
+optional, **heavily experimental** MixedInputCrouchDodgeWorkaround mod makes
+dodge and toggle crouch act on the press instead, and ships the binding edits
+above as an input_loader file - see [Optional mods](#optional-mods).
 
 ## Script API
 
@@ -192,7 +191,9 @@ The same calls can be bound to a CET hotkey or used from a CET mod.
 Small redscript mods in [mods/](mods/), each a separate download with its own
 version. Copy `<Mod>.reds` to `<game>/r6/scripts/<Mod>/` (or extract its
 archive into the game folder). All need
-[redscript](https://github.com/jac3km4/redscript).
+[redscript](https://github.com/jac3km4/redscript). Mods with custom bindings
+also ship `input/<Mod>.xml`, which goes to `<game>/r6/input/` and needs
+[input_loader](https://github.com/jackhumbert/cyberpunk2077-input-loader).
 
 - **MixedInputMenuKeys** - restores the keyboard menu shortcuts in controller
   mode (see [above](#keyboard-menu-shortcuts-controller-mode)). Inert unless
@@ -204,13 +205,20 @@ archive into the game folder). All need
   mode on foot: drive with the pad, fight with the mouse. Uses the script
   API. Deliberately minimal: until you first leave a vehicle, the ini mode
   applies.
-- **MixedInputOnPress** - *heavily experimental.* Dodge and toggle crouch
+- **MixedInputBindings** - two bindings that pin a device: pad A pins the
+  controller, Space pins kbm - i.e. jump on foot, handbrake in vehicles, so
+  you switch schemes by pressing that button on the device you pick up.
+  Rebind them in `MixedInputBindings.xml`. Uses the script API and needs
+  input_loader.
+- **MixedInputCrouchDodgeWorkaround** - *heavily experimental.* Dodge and toggle crouch
   (crouch, stand up, slide, air dash) act on the button press instead of a tap,
   so they keep working while the other device streams (see
   [above](#crouch-and-dodge-with-a-second-analog-device)). Requires the
   **Alternative** controller layout - with any other layout it changes
-  nothing - and the edited `inputUserMappings.xml` it is distributed with as
-  MixedInputCrouchDodgeWorkaround. Unlike the others it is not inert without
+  nothing - and its `MixedInputCrouchDodgeWorkaround.xml` bindings (needs
+  input_loader). Before 0.2 it was named MixedInputOnPress and shipped an
+  edited `r6/config/inputUserMappings.xml`: delete
+  `r6/scripts/MixedInputOnPress/` and restore the `.orig`. Unlike the others it is not inert without
   the pin: with Alternative, dodge and crouch act on press for everyone. It
   replaces several vanilla locomotion methods, so it must be updated for each
   game patch and conflicts with other mods that replace the same methods.

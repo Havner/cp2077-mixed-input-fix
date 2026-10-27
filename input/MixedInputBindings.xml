@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<!--
+  MixedInputBindings - input actions for r6/scripts/MixedInputBindings.
+  MixedInputPinController pins MixedInputFix to the pad, MixedInputPinKBM to
+  keyboard/mouse. Defaults ride on jump (pad A / Space) so jumping with a
+  device switches to it; change the <button> ids below to rebind.
+  No overridableUI: they stay off the settings keybinding screen and on these
+  keys even if jump is rebound there.
+-->
+<bindings>
+  <mapping name="MixedInputPinController_Button" type="Button" >
+    <button id="IK_Pad_A_CROSS" />
+  </mapping>
+
+  <mapping name="MixedInputPinKBM_Button" type="Button" >
+    <button id="IK_Space" />
+  </mapping>
+
+  <!-- On foot: Locomotion holds Jump and is included by Exploration,
+       LadderEnter, UI_QuickHackPanelLocomotion etc. -->
+  <context name="Locomotion" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <!-- Driving: the two base contexts holding Handbrake (also A / Space).
+       VehicleDriveBase is included by VehicleDrive and
+       VehicleDriveMountedWeapons, BaseVehicleDriverCombat by the
+       VehicleDriverCombat* contexts. -->
+  <context name="VehicleDriveBase" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="BaseVehicleDriverCombat" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <!-- Other vehicle states. The ones with their own Handbrake: quickhack
+       panel while driving, remote control (driver / passenger), tank. -->
+  <context name="VehicleDrive_QuickHackPanel" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="VehicleRemoteControlDrive" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="VehiclePassengerRemoteControlDrive" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="VehicleTankDrive" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <!-- No A / Space action in vanilla here: passenger (plain and combat) and
+       autodrive (BaseVehicleAutodrive is included by all VehicleAutodrive*
+       and VehicleMountedWeaponsAutodrive contexts). -->
+  <context name="VehiclePassenger" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="VehicleCombat" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="BaseVehicleAutodrive" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <!-- Delamain taxi rides and the cinematic vehicle camera. -->
+  <context name="DelamainTaxi" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+
+  <context name="VehicleCinematicCamera" append="true">
+    <action name="MixedInputPinController" map="MixedInputPinController_Button" />
+    <action name="MixedInputPinKBM" map="MixedInputPinKBM_Button" />
+  </context>
+</bindings>

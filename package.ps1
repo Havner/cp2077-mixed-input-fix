@@ -1,6 +1,8 @@
 # Package the Nexus release zips into build/:
 #   MixedInputFix-<version>.zip       red4ext/plugins/MixedInputFix/{dll,ini,scripts/*.reds}
-#   <Mod>-<version>.zip               r6/scripts/<Mod>/<Mod>.reds, one per mods/*.reds
+#   <Mod>-<version>.zip               r6/scripts/<Mod>/<Mod>.reds, one per mods/*.reds,
+#                                     plus r6/input/<Mod>.xml if input/<Mod>.xml exists
+#                                     (custom bindings, merged by input_loader)
 # All extract directly into the main game folder. Each optional redscript mod
 # ships as a separate file on Nexus, so it gets its own archive and its own
 # version, read from the "// <Mod> X.Y" banner comment at the top of the .reds.
@@ -56,5 +58,11 @@ foreach ($modSource in Get-ChildItem (Join-Path $root 'mods') -Filter '*.reds') 
     Remove-Item $modStaging -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $modDir | Out-Null
     Copy-Item $modSource.FullName $modDir
+    $modInput = Join-Path $root "input\$modName.xml"
+    if (Test-Path $modInput) {
+        $inputDir = Join-Path $modStaging 'r6\input'
+        New-Item -ItemType Directory -Force $inputDir | Out-Null
+        Copy-Item $modInput $inputDir
+    }
     New-ReleaseZip $modStaging 'r6' (Join-Path $root "build\$modName-$modVersion.zip")
 }

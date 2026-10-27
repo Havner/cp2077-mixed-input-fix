@@ -1,4 +1,4 @@
-// MixedInputOnPress 0.1 - HEAVILY EXPERIMENTAL, optional companion mod for MixedInputFix.
+// MixedInputCrouchDodgeWorkaround 0.2 - HEAVILY EXPERIMENTAL, optional companion mod for MixedInputFix.
 //
 // Dodge and toggle crouch (crouch, stand up, slide) react to the PRESS of
 // their button instead of a native tap, so they keep working while the other
@@ -40,12 +40,12 @@
 // Locomotion, so a press is unambiguous. In Legacy/Agile crouch and dodge
 // share one button (tap/double-tap), and everything stays vanilla.
 //
-// Needs the companion inputUserMappings.xml (shipped with it as
-// MixedInputCrouchDodgeWorkaround): under the flood the pad falls back from
-// the selected layout to the default layer, where vanilla binds crouch AND
-// dodge to B and quick melee to R3. The XML mirrors Alternative into the
-// default layer and adds the keyboard keys to the Alternative variants -
-// see MixedInputFix's RE-notes.md, "Known issue: crouch/dodge loss".
+// Needs the companion r6/input/MixedInputCrouchDodgeWorkaround.xml (merged by
+// input_loader): under the flood the pad falls back from the selected layout
+// to the default layer, where vanilla binds crouch AND dodge to B and quick
+// melee to R3. The XML mirrors Alternative into the default layer and adds
+// the keyboard keys to the Alternative variants - see MixedInputFix's
+// RE-notes.md, "Known issue: crouch/dodge loss".
 //
 // Not covered, still tap-based: directional double-tap dodges, low gravity,
 // ladder crouch, air thrusters / hover, scene fast-forward by crouch, the
@@ -56,8 +56,9 @@
 // and toggle crouch act on press for everyone. Replaced methods must be
 // re-checked against the game scripts on every patch (bodies are game 2.5).
 //
-// Install: r6/scripts/MixedInputOnPress/MixedInputOnPress.reds
-// Requires: redscript.
+// Install: r6/scripts/MixedInputCrouchDodgeWorkaround/MixedInputCrouchDodgeWorkaround.reds
+//          r6/input/MixedInputCrouchDodgeWorkaround.xml
+// Requires: redscript, input_loader.
 
 // ---- Press tracking ----
 

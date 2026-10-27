@@ -409,7 +409,7 @@ now hitting the pad too. Both actions trigger only on a tap: dodge in
 `CrouchSprintDecisions.ToCrouch` (`:1750`), `SlideDecisions.ToStand`
 (`:2490`).
 
-**Workaround: `mods/MixedInputOnPress.reds` (experimental).** A `PlayerPuppet`
+**Workaround: `mods/MixedInputCrouchDodgeWorkaround.reds` (experimental).** A `PlayerPuppet`
 input listener records the `PRESSED` edges, which do survive, and turns each
 into a one-frame "just pressed" keyed on `GameInstance.GetFrameNumber` (engine
 time as a `Float` has only 1/16 s resolution at typical uptimes, too coarse to
