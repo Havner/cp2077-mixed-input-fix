@@ -136,6 +136,15 @@ fixable the same way - give the pad's crouch/dodge separate single-press buttons
 in the default layer (mirror Alternative onto it) - though that is a heavier
 edit to the base controller layout. Full derivation in [RE-notes.md](RE-notes.md).
 
+Game 2.5 made it worse: even with the bindings fixed, dodge (and, less often,
+crouch) stops responding while the other device streams. The engine still
+delivers each press but drops its release, and the game only acts on a *tap*
+(press + quick release), so nothing happens until the stream stops. The
+optional, **heavily experimental** MixedInputOnPress mod makes dodge and toggle
+crouch act on the press instead; together with the edited
+`inputUserMappings.xml` it ships as MixedInputCrouchDodgeWorkaround - see
+[Optional mods](#optional-mods).
+
 ## Script API
 
 Redscript mods can switch the mode at runtime, e.g. to pin the controller
@@ -195,8 +204,19 @@ archive into the game folder). All need
   mode on foot: drive with the pad, fight with the mouse. Uses the script
   API. Deliberately minimal: until you first leave a vehicle, the ini mode
   applies.
+- **MixedInputOnPress** - *heavily experimental.* Dodge and toggle crouch
+  (crouch, stand up, slide, air dash) act on the button press instead of a tap,
+  so they keep working while the other device streams (see
+  [above](#crouch-and-dodge-with-a-second-analog-device)). Requires the
+  **Alternative** controller layout - with any other layout it changes
+  nothing - and the edited `inputUserMappings.xml` it is distributed with as
+  MixedInputCrouchDodgeWorkaround. Unlike the others it is not inert without
+  the pin: with Alternative, dodge and crouch act on press for everyone. It
+  replaces several vanilla locomotion methods, so it must be updated for each
+  game patch and conflicts with other mods that replace the same methods.
 
-The last two are also meant as examples of the script API.
+MixedInputInhibitOnPhotoMode and MixedInputVehicleControllerFpsKbm are also
+meant as examples of the script API.
 
 ## Verify
 

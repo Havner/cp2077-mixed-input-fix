@@ -375,6 +375,62 @@ quickmelee would need its own dedicated single-press button, which is exactly th
 button Alternative spent to split crouch/dodge; a controller has no spare for all
 four. The scheme only lets you choose which pair eats the arbitration.
 
+### Game 2.5: lost release edges, and the on-press workaround (2026-10-27)
+
+With the workaround above in place, 2.5 regressed: in `controller` mode pad
+dodge (B) stops responding while the mouse streams (here gyro-to-mouse while
+aiming), recovering a moment after the mouse stops; toggle crouch (R3) fails
+the same way, less consistently; `kbm` mode mirrors it with the stick + C /
+LControl. The scripts are not the cause: `DodgeDecisions` / `WantsToDodge`
+(`locomotionTransitions.script:2737` / `:322`) are unchanged from 2.31 apart
+from an additive Switch-only `IsPatternJustActivated` alternative, and no
+device-dependent logic was added on that path.
+
+A probe on `DodgeDecisions` and `CrouchDecisions` (their `OnAction` listener
+plus `EnterCondition` / `ToStand`) shows the mechanism:
+
+- Pad only: `PRESSED`, `RELEASED` ~0.06-0.12 s later, `IsActionJustTapped`
+  true on the release frame, the action fires.
+- Under the flood: **every press reaches the script listener, no release
+  does.** Dodge: ~25 `PRESSED` over 7 s with no `RELEASED` in between,
+  `GetActionValue` stuck at 1, `IsActionJustTapped` never true. Same for
+  `ToggleCrouch`, and in `kbm` mode with the stick. The one `RELEASED` arrives
+  after the flood stops, far too late to count as a tap. Move input
+  (`IsMoveInputConsiderable`, `MoveX`/`MoveY`) is unaffected.
+- `IsActionJustPressed` is no substitute: with the action latched at 1 it is
+  false for every press after the first. `IsActionJustHeld` never fires for
+  `ToggleCrouch` (no `<hold>` declared for it).
+
+So it is the same lost-release edge as the 2.31 `kbm`-mode observation above,
+now hitting the pad too. Both actions trigger only on a tap: dodge in
+`WantsToDodge` (`:352`), toggle crouch in every consumer -
+`UpdateInputToggles` (`:752`), `CheckCrouchEnterCondition` (`:781`),
+`CrouchEnterCondition` / `CrouchExitCondition` (`:804` / `:820`),
+`CrouchSprintDecisions.ToCrouch` (`:1750`), `SlideDecisions.ToStand`
+(`:2490`).
+
+**Workaround: `mods/MixedInputOnPress.reds` (experimental).** A `PlayerPuppet`
+input listener records the `PRESSED` edges, which do survive, and turns each
+into a one-frame "just pressed" keyed on `GameInstance.GetFrameNumber` (engine
+time as a `Float` has only 1/16 s resolution at typical uptimes, too coarse to
+tell frames apart). It is true for every caller during the first frame that
+asks after the press - the same shape as a native tap, so all consumers agree
+and vanilla's transition order survives (sprint -> slide still beats sprint ->
+crouch). Each tap consumer listed above is replaced with its 2.5 body, only the
+tap swapped for the press; the late release then means nothing. Alternative
+layout only: there both buttons carry a single action, so a press is
+unambiguous.
+
+Approaches tried and dropped on the way: acting on the press in one decision
+only (a crouch transition then beats slide out of sprint, and the vanilla tap
+on the release toggles straight back elsewhere), and acting only once a press
+has gone 0.3 s without a release (works, but the delay is clearly felt).
+
+Open: in `controller` mode the audio crackles while the mouse floods; not
+observed in `kbm` mode with the stick. Not investigated. Other players report
+crackling with mixed input on a PS5 controller, so it is probably an engine
+issue with dual-device input rather than something these script changes cause.
+
 ## Porting to a new game patch
 
 The plugin resolves functions via RED4ext address-library hashes, which survive
