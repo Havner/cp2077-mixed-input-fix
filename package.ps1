@@ -2,7 +2,12 @@
 #   MixedInputFix-<version>.zip       red4ext/plugins/MixedInputFix/{dll,ini,scripts/*.reds}
 #   <Mod>-<version>.zip               r6/scripts/<Mod>/<Mod>.reds, one per mods/*.reds,
 #                                     plus r6/input/<Mod>.xml if input/<Mod>.xml exists
-#                                     (custom bindings, merged by input_loader)
+#                                     (custom bindings, merged by input_loader),
+#                                     plus r6/input-<Variant>/<Mod>.xml for each
+#                                     input/<Variant>/<Mod>.xml (alternative bindings
+#                                     the user copies into r6/input/ by hand -
+#                                     input_loader reads r6/input/ recursively, so
+#                                     they can't ship inside it)
 # All extract directly into the main game folder. Each optional redscript mod
 # ships as a separate file on Nexus, so it gets its own archive and its own
 # version, read from the "// <Mod> X.Y" banner comment at the top of the .reds.
@@ -63,6 +68,14 @@ foreach ($modSource in Get-ChildItem (Join-Path $root 'mods') -Filter '*.reds') 
         $inputDir = Join-Path $modStaging 'r6\input'
         New-Item -ItemType Directory -Force $inputDir | Out-Null
         Copy-Item $modInput $inputDir
+    }
+    foreach ($variant in Get-ChildItem (Join-Path $root 'input') -Directory) {
+        $variantInput = Join-Path $variant.FullName "$modName.xml"
+        if (Test-Path $variantInput) {
+            $variantDir = Join-Path $modStaging "r6\input-$($variant.Name)"
+            New-Item -ItemType Directory -Force $variantDir | Out-Null
+            Copy-Item $variantInput $variantDir
+        }
     }
     New-ReleaseZip $modStaging 'r6' (Join-Path $root "build\$modName-$modVersion.zip")
 }

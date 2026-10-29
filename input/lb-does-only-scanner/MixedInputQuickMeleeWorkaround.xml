@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!--
+  MixedInputQuickMeleeWorkaround bindings, merged by input_loader.
+  Variant lb-does-only-scanner: the scanner keeps LB, quick melee leaves the
+  controller. The other variant is lb-does-only-quick-melee. Install exactly
+  one, as r6/input/MixedInputQuickMeleeWorkaround.xml.
+
+  Quick melee stays on the keyboard only (Q, rebindable as "Quick Melee" in
+  the keybinding settings), e.g. for a Steam / Deckhand back button mapped to
+  that key. Scanner (VisionHold) and Ping keep their vanilla buttons
+  (Tab + LB). The scanner's 0.1 s hold is cut to 0.01 s, as in the other
+  variant. On Alternative the engine still delays the scanner on LB by
+  ~0.3 s; the redscript works around that by following Ping.
+
+  QuickMelee_Button_Alternative is also mapped directly from VisionActions
+  (inputContexts.xml:1110), so both it and the default-layer
+  QuickMelee_Button (the flood fallback) lose their pad buttons.
+
+  MixedInputCrouchDodgeWorkaround.xml defines both mappings too, with LB.
+  This file has to load after it, which input_loader does when both sit in
+  r6/input/ under their own names (alphabetical order).
+-->
+<bindings>
+
+  <hold action="VisionHold" timeout="0.01" />
+
+  <mapping name="QuickMelee_Button" type="Button" >
+    <button id="IK_Q" overridableUI="quickmelee"/>
+  </mapping>
+
+  <mapping name="QuickMelee_Button_Alternative" type="Button" >
+    <button id="IK_Q" overridableUI="quickmelee"/>
+  </mapping>
+
+</bindings>

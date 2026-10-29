@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<!--
+  MixedInputQuickMeleeWorkaround bindings, merged by input_loader.
+  Variant lb-does-only-quick-melee: quick melee keeps LB, the scanner leaves
+  the controller. The other variant is lb-does-only-scanner. Install exactly
+  one, as r6/input/MixedInputQuickMeleeWorkaround.xml.
+
+  Scanner (VisionHold, also Ping) loses LB in every controller layout, so LB
+  is quick melee only and the mod can act on its press. The scanner stays on
+  the keyboard: Tab, or whatever key is set for "Scanner (hold)" in the
+  keybinding settings. Vehicle combat scanning (DriverCombatVisionHold,
+  Vision_Hold_Button_Controller) is left as is.
+
+  input_loader can't delete the scanner's <hold>, so it is shortened to
+  0.01 s (vanilla's own shortest, VehicleInverseCameraToggle): the scanner
+  comes on right after the press and stays on while held.
+
+  QuickMelee_Button is the default layer, which the pad falls back to while
+  the other device floods; vanilla has R3 there. Mirrors Alternative
+  (LB + Q), identical to MixedInputCrouchDodgeWorkaround.xml, so either file
+  may win the merge.
+-->
+<bindings>
+
+  <mapping name="Vision_Hold_Button" type="Button" >
+    <button id="IK_Tab" overridableUI="visionHold"/>
+  </mapping>
+
+  <hold action="VisionHold" timeout="0.01" />
+
+  <mapping name="QuickMelee_Button" type="Button" >
+    <button id="IK_Pad_LeftShoulder" />  <!-- ALTERNATIVE -->
+    <button id="IK_Q" overridableUI="quickmelee"/>
+  </mapping>
+
+  <mapping name="QuickMelee_Button_Alternative" type="Button" >
+    <button id="IK_Pad_LeftShoulder" />
+    <button id="IK_Q" overridableUI="quickmelee"/>
+  </mapping>
+
+</bindings>

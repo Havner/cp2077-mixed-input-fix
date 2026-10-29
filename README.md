@@ -222,6 +222,28 @@ also ship `input/<Mod>.xml`, which goes to `<game>/r6/input/` and needs
   the pin: with Alternative, dodge and crouch act on press for everyone. It
   replaces several vanilla locomotion methods, so it must be updated for each
   game patch and conflicts with other mods that replace the same methods.
+- **MixedInputQuickMeleeWorkaround** - *experimental.* Quick melee and the
+  dual-pistol Valentino's Frenzy (same button) act on the button press instead
+  of a tap, for the same reason: while the other device streams, the release
+  is lost and quick melee never fires. With the **Alternative** layout quick
+  melee (tap) and the scanner (hold) share LB, and only the release tells them
+  apart, so one of the two has to leave the controller. The archive ships two
+  variants of `MixedInputQuickMeleeWorkaround.xml` (needs input_loader).
+  **Copy exactly one into `r6/input/`.** input_loader also reads subfolders of
+  `r6/input/`, so the variants ship outside it:
+  - `r6/input-lb-does-only-quick-melee/` - LB is quick melee, and **the scanner
+    is removed from the controller**, in every layout. Bind it to a keyboard
+    key: Tab by default, or set "Scanner (hold)" in the keybinding settings.
+  - `r6/input-lb-does-only-scanner/` - LB is the scanner, and **quick melee is
+    removed from the controller**: Q by default, or set "Quick Melee". The
+    engine still delays the scanner on Alternative's LB by about 0.3 s, which
+    the mod works around.
+
+  Either way, a Steam Input / Deckhand back button mapped to that key works
+  too, and the scanner comes on as soon as it is pressed (the XMLs drop its
+  short hold delay). Not inert without the pin: quick melee acts on press for
+  everyone. It replaces several vanilla quick melee and Frenzy methods, so it
+  must be re-checked for each game patch.
 
 MixedInputInhibitOnPhotoMode and MixedInputVehicleControllerFpsKbm are also
 meant as examples of the script API.
